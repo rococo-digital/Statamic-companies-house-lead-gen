@@ -1,0 +1,20 @@
+{
+  "resources/css/cp.css": {
+    "file": "assets/css-CGoAhSXm.js",
+    "name": "css",
+    "src": "resources/css/cp.css",
+    "isEntry": true,
+    "css": [
+      "assets/css-rEVgfdXR.css"
+    ]
+  },
+  "resources/js/cp.js": {
+    "file": "assets/cp-DNKfUWFd.js",
+    "name": "cp",
+    "src": "resources/js/cp.js",
+    "isEntry": true,
+    "imports": [
+      "resources/css/cp.css"
+    ]
+  }
+}

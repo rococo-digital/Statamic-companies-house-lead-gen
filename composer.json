@@ -1,0 +1,45 @@
+{
+    "name": "rococo/ch-lead-gen",
+    "description": "Companies House Lead Generator for Statamic",
+    "type": "statamic-addon",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Rococo\\ChLeadGen\\": "src"
+        }
+    },
+    "authors": [
+        {
+            "name": "Rococo Digital",
+            "email": "matt@rococodigital.co.uk"
+        }
+    ],
+    "require": {
+        "php": "^8.0",
+        "statamic/cms": "^4.0",
+        "guzzlehttp/guzzle": "^7.0",
+        "vlucas/phpdotenv": "^5.3"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^9.0"
+    },
+    "config": {
+        "allow-plugins": {
+            "pixelfear/composer-dist-plugin": true
+        },
+        "sort-packages": true
+    },
+    "extra": {
+        "statamic": {
+            "name": "CH Lead Gen",
+            "description": "Companies House Lead Generator for Statamic"
+        },
+        "laravel": {
+            "providers": [
+                "Rococo\\ChLeadGen\\ServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
