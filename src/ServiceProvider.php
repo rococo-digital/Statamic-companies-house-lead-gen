@@ -24,7 +24,7 @@ class ServiceProvider extends AddonServiceProvider
             'resources/js/cp.js',
             'resources/css/cp.css',
         ],
-        'publicDirectory' => 'vendor/ch-lead-gen/build',
+        'publicDirectory' => 'vendor/ch-lead-gen',
     ];
 
     public function bootAddon()
@@ -45,10 +45,9 @@ class ServiceProvider extends AddonServiceProvider
             __DIR__.'/../resources/views' => resource_path('views/vendor/ch-lead-gen'),
         ], 'ch-lead-gen-views');
 
-        $this->publishes([
-            __DIR__.'/../build' => public_path('vendor/ch-lead-gen/build'),
-        ], 'ch-lead-gen-assets');
-
+        // Remove problematic asset publishing for now
+        // Assets will be handled by Vite instead
+        
         Nav::extend(function ($nav) {
             $nav->create('CH Lead Gen')
                 ->section('Tools')
