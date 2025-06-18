@@ -19,13 +19,13 @@ class ServiceProvider extends AddonServiceProvider
         'cp' => __DIR__.'/../routes/cp.php',
     ];
 
-    protected $vite = [
-        'input' => [
-            'resources/js/cp.js',
-            'resources/css/cp.css',
-        ],
-        'publicDirectory' => 'vendor/ch-lead-gen',
-    ];
+    // protected $vite = [
+    //     'input' => [
+    //         'resources/js/cp.js',
+    //         'resources/css/cp.css',
+    //     ],
+    //     'publicDirectory' => 'vendor/ch-lead-gen',
+    // ];
 
     public function bootAddon()
     {
