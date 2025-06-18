@@ -26,7 +26,7 @@ return [
     'schedule' => [
         'enabled' => env('CH_LEAD_GEN_SCHEDULE_ENABLED') !== null 
             ? filter_var(env('CH_LEAD_GEN_SCHEDULE_ENABLED'), FILTER_VALIDATE_BOOLEAN)
-            : app()->environment('production'),
+            : env('APP_ENV', 'production') === 'production',
         'frequency' => env('CH_LEAD_GEN_SCHEDULE_FREQUENCY', 'daily'), // daily, weekly, monthly
         'time' => env('CH_LEAD_GEN_SCHEDULE_TIME', '09:00'), // 24-hour format
     ],
@@ -58,4 +58,4 @@ return [
         'enabled' => true,
         'retention_days' => 30,
     ],
-]; 
+];
