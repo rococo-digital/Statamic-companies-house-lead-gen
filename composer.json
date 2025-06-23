@@ -1,6 +1,7 @@
 {
     "name": "rococo/ch-lead-gen",
     "description": "Companies House Lead Generator for Statamic",
+    "version": "1.1.0",
     "type": "statamic-addon",
     "license": "MIT",
     "autoload": {
