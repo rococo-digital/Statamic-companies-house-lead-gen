@@ -87,6 +87,26 @@
             </div>
 
             <div class="mb-6">
+                <h2 class="mb-4">Instantly Settings</h2>
+                <div class="grid grid-cols-1 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Lead List Name</label>
+                        <input type="text" name="instantly[lead_list_name]" value="{{ $settings['instantly']['lead_list_name'] ?? 'CH Lead Generation' }}" class="input-text mt-1 w-full" placeholder="CH Lead Generation">
+                        <p class="text-sm text-gray-500 mt-1">Name of the lead list to add contacts to. If it doesn't exist, it will be created.</p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Enable Enrichment</label>
+                        <div class="mt-1">
+                            <label class="inline-flex items-center">
+                                <input type="checkbox" name="instantly[enable_enrichment]" value="1" {{ ($settings['instantly']['enable_enrichment'] ?? false) ? 'checked' : '' }} class="form-checkbox">
+                                <span class="ml-2">Enable enrichment in Instantly (leave unchecked since Apollo already enriches contacts)</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-6">
                 <h2 class="mb-4">Logging</h2>
                 <div class="grid grid-cols-2 gap-4">
                     <div>
@@ -174,6 +194,10 @@
                         data['search.allowed_countries'].push(input.value.trim());
                     }
                 });
+                
+                // Collect Instantly settings
+                data['instantly.lead_list_name'] = form.querySelector('[name="instantly[lead_list_name]"]').value || 'CH Lead Generation';
+                data['instantly.enable_enrichment'] = form.querySelector('[name="instantly[enable_enrichment]"]').checked;
                 
                 // Collect logging settings
                 data['logging.enabled'] = form.querySelector('[name="logging[enabled]"]').checked;

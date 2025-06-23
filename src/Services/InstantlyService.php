@@ -32,8 +32,9 @@ class InstantlyService
             return;
         }
 
-        $leadListName = 'CH_require-confirmation-statement-' . now()->format('Y-m-d_H-i-s');
-        Log::info("Creating lead list: {$leadListName}");
+        // Use configured lead list name instead of generating one with timestamp
+        $leadListName = $this->config['instantly']['lead_list_name'] ?? 'CH Lead Generation';
+        Log::info("Using lead list: {$leadListName}");
 
         try {
             // Get or create the lead list
@@ -113,7 +114,9 @@ class InstantlyService
                 }
             }
 
-            // Create new list if not found
+            // Create new list if not found - ensure enrichment is disabled since Apollo already handles this
+            $enableEnrichment = $this->config['instantly']['enable_enrichment'] ?? false;
+            
             $response = $this->client->post('api/v2/lead-lists', [
                 'headers' => [
                     'Authorization' => 'Bearer ' . $this->config['instantly_api_key'],
@@ -121,13 +124,14 @@ class InstantlyService
                     'Accept' => 'application/json',
                 ],
                 'json' => [
-                    'name' => $name
+                    'name' => $name,
+                    'has_enrichment_task' => $enableEnrichment
                 ]
             ]);
 
             $data = json_decode($response->getBody()->getContents(), true);
             if (isset($data['id'])) {
-                Log::info("Created new lead list '{$name}' with ID {$data['id']}");
+                Log::info("Created new lead list '{$name}' with ID {$data['id']} (enrichment: " . ($enableEnrichment ? 'enabled' : 'disabled') . ")");
                 return $data['id'];
             }
 

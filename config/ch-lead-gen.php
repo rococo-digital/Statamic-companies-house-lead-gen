@@ -48,6 +48,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Instantly Settings
+    |--------------------------------------------------------------------------
+    |
+    | Configure settings for Instantly integration.
+    |
+    */
+    'instantly' => [
+        'lead_list_name' => env('CH_LEAD_GEN_INSTANTLY_LEAD_LIST_NAME', 'CH Lead Generation'),
+        'enable_enrichment' => false, // Enrichment is already done via Apollo
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Logging
     |--------------------------------------------------------------------------
     |

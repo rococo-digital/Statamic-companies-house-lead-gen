@@ -39,6 +39,8 @@ class SettingsController extends Controller
                 'search.company_status' => 'nullable|string',
                 'search.company_type' => 'nullable|string',
                 'search.allowed_countries' => 'nullable|array',
+                'instantly.lead_list_name' => 'nullable|string',
+                'instantly.enable_enrichment' => 'nullable|boolean',
                 'logging.enabled' => 'nullable|boolean',
                 'logging.retention_days' => 'nullable|integer|min:1',
             ])->validate();
@@ -55,6 +57,8 @@ class SettingsController extends Controller
                 'search.company_status',
                 'search.company_type',
                 'search.allowed_countries',
+                'instantly.lead_list_name',
+                'instantly.enable_enrichment',
                 'logging.enabled',
                 'logging.retention_days'
             ];
