@@ -6,13 +6,22 @@ use Statamic\Providers\AddonServiceProvider;
 use Statamic\Facades\CP\Nav;
 use Statamic\Facades\Permission;
 use Rococo\ChLeadGen\Commands\RunLeadGeneration;
+use Rococo\ChLeadGen\Commands\ManageRules;
 use Rococo\ChLeadGen\Http\Controllers\CP\DashboardController;
 use Rococo\ChLeadGen\Http\Controllers\CP\SettingsController;
+use Rococo\ChLeadGen\Services\RuleManagerService;
+use Rococo\ChLeadGen\Services\StatsService;
+use Rococo\ChLeadGen\Services\CompaniesHouseService;
+use Rococo\ChLeadGen\Services\ApolloService;
+use Rococo\ChLeadGen\Services\InstantlyService;
+use Rococo\ChLeadGen\Services\RuleConfigService;
+use Rococo\ChLeadGen\Services\WebhookService;
 
 class ServiceProvider extends AddonServiceProvider
 {
     protected $commands = [
         RunLeadGeneration::class,
+        ManageRules::class,
     ];
 
     protected $routes = [
@@ -31,6 +40,7 @@ class ServiceProvider extends AddonServiceProvider
     {
         $this->commands([
             RunLeadGeneration::class,
+            ManageRules::class,
         ]);
 
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'ch-lead-gen');
@@ -51,13 +61,56 @@ class ServiceProvider extends AddonServiceProvider
         Nav::extend(function ($nav) {
             $nav->create('CH Lead Gen')
                 ->section('Tools')
-                ->url(cp_route('ch-lead-gen.index'))
+                ->url(cp_route('ch-lead-gen.dashboard'))
                 ->icon('hammer-wrench')
-                ->can('view ch-lead-gen');
+                ->can('view ch-lead-gen')
+                ->children([
+                    $nav->item('Dashboard')->url(cp_route('ch-lead-gen.dashboard')),
+                    $nav->item('Rules')->url(cp_route('ch-lead-gen.rules.index')),
+                    $nav->item('Settings')->url(cp_route('ch-lead-gen.settings')),
+                ]);
         });
 
         Permission::register('view ch-lead-gen')
             ->label('View CH Lead Gen')
             ->description('Allow viewing the CH Lead Gen dashboard');
+    }
+
+    public function register()
+    {
+        // Register services with dependency injection
+        $this->app->singleton(StatsService::class, function ($app) {
+            return new StatsService();
+        });
+
+        $this->app->singleton(CompaniesHouseService::class, function ($app) {
+            return new CompaniesHouseService();
+        });
+
+        $this->app->singleton(ApolloService::class, function ($app) {
+            return new ApolloService();
+        });
+
+        $this->app->singleton(InstantlyService::class, function ($app) {
+            return new InstantlyService();
+        });
+
+        $this->app->singleton(WebhookService::class, function ($app) {
+            return new WebhookService();
+        });
+
+        $this->app->singleton(RuleManagerService::class, function ($app) {
+            return new RuleManagerService(
+                $app->make(CompaniesHouseService::class),
+                $app->make(ApolloService::class),
+                $app->make(InstantlyService::class),
+                $app->make(StatsService::class),
+                $app->make(WebhookService::class)
+            );
+        });
+
+        $this->app->singleton(RuleConfigService::class, function ($app) {
+            return new RuleConfigService();
+        });
     }
 }

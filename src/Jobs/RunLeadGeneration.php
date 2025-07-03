@@ -7,163 +7,234 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Rococo\ChLeadGen\Services\CompaniesHouseService;
-use Rococo\ChLeadGen\Services\ApolloService;
-use Rococo\ChLeadGen\Services\InstantlyService;
+use Rococo\ChLeadGen\Services\RuleManagerService;
+use Rococo\ChLeadGen\Services\StatsService;
 use Illuminate\Support\Facades\Log;
 
 class RunLeadGeneration implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public function handle(CompaniesHouseService $companiesHouse, ApolloService $apollo, InstantlyService $instantly)
+    protected $ruleKey;
+    protected $forceRun;
+
+    /**
+     * Create a new job instance.
+     *
+     * @param string|null $ruleKey Specific rule to run, or null for all scheduled rules
+     * @param bool $forceRun Force run even if rule is disabled or not scheduled
+     */
+    public function __construct(?string $ruleKey = null, bool $forceRun = false)
+    {
+        $this->ruleKey = $ruleKey;
+        $this->forceRun = $forceRun;
+    }
+
+    public function handle(RuleManagerService $ruleManager, StatsService $statsService)
     {
         try {
-            Log::info('=== Starting lead generation process from dashboard ===');
-            
-            // Get config
-            $config = config('ch-lead-gen');
-            Log::info('Using config:', $config);
+            Log::info('=== Starting lead generation job ===', [
+                'rule_key' => $this->ruleKey,
+                'force_run' => $this->forceRun
+            ]);
 
-            // Check if API key is configured
-            if (empty($config['companies_house_api_key'])) {
-                Log::error('Companies House API key not configured');
-                return;
+            if ($this->ruleKey) {
+                // Run specific rule
+                $result = $this->runSpecificRule($ruleManager);
+            } else {
+                // Run all scheduled rules (default behavior for backward compatibility)
+                $result = $this->runScheduledRules($ruleManager);
             }
 
-            // Build search parameters from config - use a date range instead of single date
-            $fromDate = now()->subMonths($config['search']['months_ago'] + 1)->format('Y-m-d');
-            $toDate = now()->subMonths($config['search']['months_ago'])->format('Y-m-d');
-            
-            $searchParams = [
-                'incorporated_from' => $fromDate,
-                'incorporated_to' => $toDate,
-                'company_status' => $config['search']['company_status'],
-                'company_type' => $config['search']['company_type'],
-            ];
-            
-            Log::info('Search parameters with date range:', $searchParams);
-
-            // Get companies from Companies House with enhanced pagination (up to 500 companies)
-            $companies = $companiesHouse->searchCompanies($searchParams, 500);
-
-            if (!$companies) {
-                Log::error('Failed to fetch companies from Companies House');
-                return;
-            }
-
-            Log::info('Raw API response structure:', ['keys' => array_keys($companies)]);
-
-            if (!isset($companies['items'])) {
-                Log::warning('No items found in Companies House response', ['response' => $companies]);
-                return;
-            }
-
-            $companiesCount = count($companies['items']);
-            Log::info("Found {$companiesCount} companies from API");
-
-            if ($companiesCount === 0) {
-                Log::info('No companies found matching criteria');
-                return;
-            }
-
-            // Log details about the first few companies to see their structure
-            for ($i = 0; $i < min(3, $companiesCount); $i++) {
-                $company = $companies['items'][$i];
-                Log::info("Sample company {$i}:", [
-                    'company_number' => $company['company_number'] ?? 'N/A',
-                    'title' => $company['title'] ?? 'N/A',
-                    'company_status' => $company['company_status'] ?? 'N/A',
-                    'address' => $company['address'] ?? 'N/A',
-                    'date_of_creation' => $company['date_of_creation'] ?? 'N/A'
-                ]);
-            }
-
-            // TESTING: Skip country filtering for now and limit to more companies for better testing
-            $maxCompaniesToProcess = 10; // Increased from 2 to 10 for more comprehensive testing
-            $companiesToProcess = array_slice($companies['items'], 0, $maxCompaniesToProcess);
-            
-            Log::info("=== TESTING MODE: Processing {$maxCompaniesToProcess} companies with enhanced pagination ===");
-
-            $allContacts = [];
-            $processedCount = 0;
-
-            foreach ($companiesToProcess as $company) {
-                Log::info('Processing company:', [
-                    'company_number' => $company['company_number'],
-                    'company_name' => $company['title'] ?? 'Unknown',
-                    'company_status' => $company['company_status'] ?? 'Unknown'
-                ]);
-
-                // Get detailed company information
-                $profile = $companiesHouse->getCompanyProfile($company['company_number']);
-                
-                if (!$profile) {
-                    Log::warning('Failed to fetch profile for company: ' . $company['company_number']);
-                    continue;
-                }
-
-                $companyName = $profile['company_name'] ?? $company['title'] ?? 'Unknown';
-                
-                Log::info('Company profile retrieved:', [
-                    'company_number' => $company['company_number'],
-                    'company_name' => $companyName,
-                    'date_of_creation' => $profile['date_of_creation'] ?? 'Unknown'
-                ]);
-
-                // Find people for this company using Apollo
-                if (!empty($config['apollo_api_key'])) {
-                    try {
-                        Log::info("Searching for people at {$companyName}...");
-                        $people = $apollo->findPeopleForCompany($companyName);
-                        
-                        if (!empty($people)) {
-                            Log::info("Found " . count($people) . " people for {$companyName}");
-                            
-                            // Enrich people details to get email addresses
-                            $contacts = $apollo->enrichPeopleDetails($people);
-                            
-                            if (!empty($contacts)) {
-                                $allContacts = array_merge($allContacts, $contacts);
-                                Log::info("Added " . count($contacts) . " contacts with emails for {$companyName}");
-                            }
-                        } else {
-                            Log::info("No people found for {$companyName}");
-                        }
-                    } catch (\Exception $e) {
-                        Log::error("Error processing Apollo data for {$companyName}: " . $e->getMessage());
-                        // Continue processing other companies even if one fails
-                    }
-                }
-
-                $processedCount++;
-                
-                // Add delay between companies to be extra safe with rate limiting
-                Log::info("Waiting 3 seconds before processing next company...");
-                sleep(3);
-            }
-
-            Log::info("=== Lead generation process completed successfully ===");
-            Log::info("Processed {$processedCount} companies, found " . count($allContacts) . " total contacts");
-
-            // Add contacts to Instantly if we have any
-            if (!empty($allContacts) && !empty($config['instantly_api_key'])) {
-                try {
-                    Log::info("Adding " . count($allContacts) . " contacts to Instantly...");
-                    $instantly->addContacts($allContacts);
-                    Log::info("Successfully added contacts to Instantly");
-                } catch (\Exception $e) {
-                    Log::error("Error adding contacts to Instantly: " . $e->getMessage());
-                }
-            }
-
-            Log::info('=== Lead generation job finished successfully ===');
+            Log::info('=== Lead generation job completed ===', ['result' => $result]);
 
         } catch (\Exception $e) {
-            Log::error('=== Error in lead generation process ===');
+            Log::error('=== Error in lead generation job ===');
             Log::error('Error message: ' . $e->getMessage());
             Log::error('Stack trace: ' . $e->getTraceAsString());
             throw $e;
         }
+    }
+
+    /**
+     * Run a specific rule
+     */
+    protected function runSpecificRule(RuleManagerService $ruleManager): array
+    {
+        Log::info("Executing specific rule: {$this->ruleKey}");
+
+        try {
+            $result = $ruleManager->executeRule($this->ruleKey, $this->forceRun);
+            
+            Log::info("Rule execution completed", [
+                'rule_key' => $this->ruleKey,
+                'success' => $result['success'],
+                'companies_found' => $result['companies_found'] ?? 0,
+                'contacts_found' => $result['contacts_found'] ?? 0,
+                'contacts_added' => $result['contacts_added'] ?? 0,
+                'execution_time' => $result['execution_time'] ?? 0,
+            ]);
+
+            return $result;
+
+        } catch (\Exception $e) {
+            Log::error("Failed to execute rule {$this->ruleKey}: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    /**
+     * Run all scheduled rules (backward compatibility)
+     */
+    protected function runScheduledRules(RuleManagerService $ruleManager): array
+    {
+        Log::info("Executing all scheduled rules");
+
+        $dueRules = $ruleManager->getRulesDueToRun();
+        
+        if (empty($dueRules)) {
+            Log::info("No rules due to run at this time");
+            
+            // For backward compatibility, if no rules are configured or due,
+            // check if we should fall back to legacy behavior
+            if ($this->shouldUseLegacyFallback($ruleManager)) {
+                return $this->runLegacyFallback($ruleManager);
+            }
+            
+            return ['message' => 'No rules due to run'];
+        }
+
+        Log::info("Found " . count($dueRules) . " rules due to run", ['rules' => array_keys($dueRules)]);
+
+        $results = $ruleManager->executeScheduledRules();
+        
+        $successCount = 0;
+        $failureCount = 0;
+        $totalCompanies = 0;
+        $totalContacts = 0;
+        $totalAdded = 0;
+
+        foreach ($results as $ruleKey => $result) {
+            if ($result['success']) {
+                $successCount++;
+                $totalCompanies += $result['companies_found'] ?? 0;
+                $totalContacts += $result['contacts_found'] ?? 0;
+                $totalAdded += $result['contacts_added'] ?? 0;
+            } else {
+                $failureCount++;
+            }
+        }
+
+        Log::info("All scheduled rules executed", [
+            'total_rules' => count($results),
+            'successful' => $successCount,
+            'failed' => $failureCount,
+            'total_companies' => $totalCompanies,
+            'total_contacts' => $totalContacts,
+            'total_added' => $totalAdded,
+        ]);
+
+        return [
+            'total_rules' => count($results),
+            'successful' => $successCount,
+            'failed' => $failureCount,
+            'total_companies' => $totalCompanies,
+            'total_contacts' => $totalContacts,
+            'total_added' => $totalAdded,
+            'results' => $results,
+        ];
+    }
+
+    /**
+     * Check if we should use legacy fallback behavior
+     */
+    protected function shouldUseLegacyFallback(RuleManagerService $ruleManager): bool
+    {
+        $allRules = $ruleManager->getAllRules();
+        
+        // If no rules are configured, fall back to legacy behavior
+        if (empty($allRules)) {
+            Log::info("No rules configured, falling back to legacy behavior");
+            return true;
+        }
+
+        // If rules exist but none are enabled, don't fallback
+        $enabledRules = $ruleManager->getEnabledRules();
+        if (empty($enabledRules)) {
+            Log::info("Rules configured but none enabled, not falling back to legacy");
+            return false;
+        }
+
+        return false;
+    }
+
+    /**
+     * Legacy fallback for backward compatibility
+     * This runs the old hardcoded logic when no rules are configured
+     */
+    protected function runLegacyFallback(RuleManagerService $ruleManager): array
+    {
+        Log::info("=== Running legacy fallback behavior ===");
+
+        // This creates a temporary rule based on the legacy config
+        $config = config('ch-lead-gen');
+        
+        $legacyRule = [
+            'name' => 'Legacy Lead Generation',
+            'enabled' => true,
+            'search_parameters' => [
+                'months_ago' => $config['search']['months_ago'] ?? 11,
+                'company_status' => $config['search']['company_status'] ?? 'active',
+                'company_type' => $config['search']['company_type'] ?? 'ltd',
+                'allowed_countries' => $config['search']['allowed_countries'] ?? ['GB', 'US'],
+                'max_results' => 500,
+                'check_confirmation_statement' => true, // Legacy behavior
+            ],
+            'instantly' => [
+                'lead_list_name' => $config['instantly']['lead_list_name'] ?? 'CH Lead Generation',
+                'enable_enrichment' => false,
+            ],
+        ];
+
+        try {
+            // Temporarily add the legacy rule to config
+            $tempConfig = $config;
+            $tempConfig['rules'] = ['legacy' => $legacyRule];
+            config(['ch-lead-gen' => $tempConfig]);
+
+            // Execute the legacy rule
+            $result = $ruleManager->executeRule('legacy', true);
+            
+            Log::info("Legacy fallback completed", [
+                'companies_found' => $result['companies_found'] ?? 0,
+                'contacts_found' => $result['contacts_found'] ?? 0,
+                'contacts_added' => $result['contacts_added'] ?? 0,
+            ]);
+
+            return $result;
+
+        } catch (\Exception $e) {
+            Log::error("Legacy fallback failed: " . $e->getMessage());
+            throw $e;
+        } finally {
+            // Restore original config
+            config(['ch-lead-gen' => $config]);
+        }
+    }
+
+    /**
+     * Static method to dispatch job for a specific rule
+     */
+    public static function dispatchRule(string $ruleKey, bool $forceRun = false): void
+    {
+        static::dispatch($ruleKey, $forceRun);
+    }
+
+    /**
+     * Static method to dispatch job for all scheduled rules (default behavior)
+     */
+    public static function dispatchScheduled(): void
+    {
+        static::dispatch();
     }
 } 

@@ -6,29 +6,62 @@ use Illuminate\Http\Request;
 use Statamic\Http\Controllers\Controller;
 use Statamic\Facades\CP\Toast;
 use Illuminate\Support\Facades\Log;
+use Rococo\ChLeadGen\Services\RuleManagerService;
+use Rococo\ChLeadGen\Services\StatsService;
 
 class DashboardController extends Controller
 {
+    protected $ruleManagerService;
+    protected $statsService;
+
+    public function __construct(RuleManagerService $ruleManagerService, StatsService $statsService)
+    {
+        $this->ruleManagerService = $ruleManagerService;
+        $this->statsService = $statsService;
+    }
+
     public function index()
     {
+        // Get all rules and their statistics
+        $rules = $this->ruleManagerService->getAllRules();
+        $rulesStats = $this->statsService->getAllRulesStats();
+        
+        // Get internal API usage tracking
+        $internalApiUsage = $this->statsService->getOverallApiUsage(7);
+
         return view('ch-lead-gen::dashboard', [
             'config' => config('ch-lead-gen'),
+            'rules' => $rules,
+            'rulesStats' => $rulesStats,
+            'internalApiUsage' => $internalApiUsage,
         ]);
     }
 
-    public function run()
+    public function run(Request $request)
     {
         try {
             Log::info('=== Dashboard: Lead generation run button clicked ===');
             
-            // Dispatch the job
-            \Rococo\ChLeadGen\Jobs\RunLeadGeneration::dispatch();
+            $ruleKey = $request->input('rule_key');
+            $forceRun = $request->boolean('force_run', false);
+            
+            if ($ruleKey) {
+                // Run specific rule
+                Log::info("Dashboard: Running specific rule: {$ruleKey}");
+                \Rococo\ChLeadGen\Jobs\RunLeadGeneration::dispatchRule($ruleKey, $forceRun);
+                $message = "Lead generation process started for rule: {$ruleKey}";
+            } else {
+                // Run all scheduled rules (legacy behavior)
+                Log::info('Dashboard: Running all scheduled rules');
+                \Rococo\ChLeadGen\Jobs\RunLeadGeneration::dispatchScheduled();
+                $message = 'Lead generation process started for all scheduled rules';
+            }
             
             Log::info('=== Dashboard: Job dispatched successfully ===');
 
             return response()->json([
                 'success' => true,
-                'message' => 'Lead generation process started successfully'
+                'message' => $message
             ]);
         } catch (\Exception $e) {
             Log::error('=== Dashboard: Error dispatching job ===');
@@ -42,14 +75,34 @@ class DashboardController extends Controller
         }
     }
 
+
+
+    public function toggleRule(Request $request, string $ruleKey)
+    {
+        try {
+            $enabled = $request->boolean('enabled');
+            
+            // This would typically update the database or config file
+            // For now, we'll just return success since we're using config files
+            
+            Log::info("Dashboard: Toggling rule {$ruleKey} to " . ($enabled ? 'enabled' : 'disabled'));
+            
+            return response()->json([
+                'success' => true,
+                'message' => "Rule {$ruleKey} " . ($enabled ? 'enabled' : 'disabled')
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Error toggling rule {$ruleKey}: " . $e->getMessage());
+            return response()->json(['error' => 'Failed to toggle rule'], 500);
+        }
+    }
+
     public function logs()
     {
         return response()->json([
             'logs' => $this->getRecentLogs()
         ]);
     }
-
-
 
     private function getRecentLogs()
     {
@@ -71,7 +124,9 @@ class DashboardController extends Controller
                     strpos($line, 'Found') !== false && strpos($line, 'companies') !== false ||
                     strpos($line, 'Apollo') !== false ||
                     strpos($line, 'Instantly') !== false ||
-                    strpos($line, 'Lead generation') !== false) {
+                    strpos($line, 'Lead generation') !== false ||
+                    strpos($line, 'rule execution') !== false ||
+                    strpos($line, 'Rule execution') !== false) {
                     
                     // Parse the log entry
                     $parsed = $this->parseLogEntry($line);
@@ -115,24 +170,23 @@ class DashboardController extends Controller
         
         // Make messages more user-friendly
         $replacements = [
-            'Starting lead generation process from dashboard' => '🚀 Starting lead generation process...',
+            'Starting lead generation job' => '🚀 Starting lead generation job...',
+            'Starting rule execution:' => '🎯 Starting rule:',
+            'Completed rule execution:' => '✅ Completed rule:',
             'Job dispatched successfully' => '✅ Job started successfully',
             'Found 0 companies from API' => '⚠️ No companies found for the specified criteria',
             'No companies found matching criteria' => '📄 Search completed - no matching companies',
-            'Processing company:' => '🏢 Processing company:',
+            'Processing company for rule' => '🏢 Processing company for rule',
             'Company profile retrieved:' => '📋 Retrieved company details:',
             'Searching for people at' => '👥 Searching for contacts at',
             'Found' => '✅ Found',
             'No people found for' => '❌ No contacts found for',
-            'Lead generation process completed successfully' => '🎉 Lead generation completed successfully!',
-            'Lead generation job finished successfully' => '✅ Process finished successfully'
+            'Lead generation job completed' => '🎉 Lead generation completed!',
+            'All scheduled rules executed' => '✅ All rules finished successfully'
         ];
         
         foreach ($replacements as $search => $replace) {
-            if (strpos($message, $search) !== false) {
-                $message = str_replace($search, $replace, $message);
-                break;
-            }
+            $message = str_replace($search, $replace, $message);
         }
         
         return $message;

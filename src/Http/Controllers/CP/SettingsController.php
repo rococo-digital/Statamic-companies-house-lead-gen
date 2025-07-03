@@ -27,20 +27,12 @@ class SettingsController extends Controller
             // Let's see what keys we actually have
             Log::info('Available keys:', array_keys($data));
             
-            // Validate the received data
+            // Validate the received data - simplified for global settings only
             $validated = validator($data, [
                 'companies_house_api_key' => 'nullable|string',
                 'apollo_api_key' => 'nullable|string',
                 'instantly_api_key' => 'nullable|string',
                 'schedule.enabled' => 'nullable|boolean',
-                'schedule.frequency' => 'nullable|string|in:daily,weekly,monthly',
-                'schedule.time' => 'nullable|string',
-                'search.months_ago' => 'nullable|integer|min:1|max:12',
-                'search.company_status' => 'nullable|string',
-                'search.company_type' => 'nullable|string',
-                'search.allowed_countries' => 'nullable|array',
-                'instantly.lead_list_name' => 'nullable|string',
-                'instantly.enable_enrichment' => 'nullable|boolean',
                 'logging.enabled' => 'nullable|boolean',
                 'logging.retention_days' => 'nullable|integer|min:1',
             ])->validate();
@@ -51,14 +43,6 @@ class SettingsController extends Controller
                 'apollo_api_key', 
                 'instantly_api_key',
                 'schedule.enabled',
-                'schedule.frequency',
-                'schedule.time',
-                'search.months_ago',
-                'search.company_status',
-                'search.company_type',
-                'search.allowed_countries',
-                'instantly.lead_list_name',
-                'instantly.enable_enrichment',
                 'logging.enabled',
                 'logging.retention_days'
             ];
@@ -84,7 +68,7 @@ class SettingsController extends Controller
             $config = File::getRequire($configPath);
             Log::info('Current config:', $config);
             
-            // Update the config values
+            // Update only the global config values (preserve individual rule settings)
             foreach ($validated as $key => $value) {
                 if (strpos($key, '.') !== false) {
                     list($section, $field) = explode('.', $key);
