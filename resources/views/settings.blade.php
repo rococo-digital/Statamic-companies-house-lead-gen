@@ -25,6 +25,11 @@
                         <input type="text" name="apollo_api_key" value="{{ $settings['apollo_api_key'] }}" class="input-text mt-1 w-full">
                     </div>
                     <div>
+                        <label class="block text-sm font-medium text-gray-700">Apollo Master API Key</label>
+                        <input type="text" name="apollo_master_api_key" value="{{ $settings['apollo_master_api_key'] ?? '' }}" class="input-text mt-1 w-full">
+                        <p class="text-sm text-gray-500 mt-1">Required for viewing detailed Apollo API usage statistics. This key has higher permissions than the regular API key.</p>
+                    </div>
+                    <div>
                         <label class="block text-sm font-medium text-gray-700">Instantly API Key</label>
                         <input type="text" name="instantly_api_key" value="{{ $settings['instantly_api_key'] }}" class="input-text mt-1 w-full">
                     </div>
@@ -114,6 +119,7 @@
                 // Collect API keys
                 data['companies_house_api_key'] = form.querySelector('[name="companies_house_api_key"]').value || '';
                 data['apollo_api_key'] = form.querySelector('[name="apollo_api_key"]').value || '';
+                data['apollo_master_api_key'] = form.querySelector('[name="apollo_master_api_key"]').value || '';
                 data['instantly_api_key'] = form.querySelector('[name="instantly_api_key"]').value || '';
                 
                 // Collect global schedule setting

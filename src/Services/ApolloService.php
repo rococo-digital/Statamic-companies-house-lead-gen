@@ -20,6 +20,15 @@ class ApolloService
     public function __construct()
     {
         $this->config = config('ch-lead-gen');
+        
+        // Add fallback to environment variables for API keys
+        if (empty($this->config['apollo_api_key'])) {
+            $this->config['apollo_api_key'] = env('APOLLO_API_KEY');
+        }
+        if (empty($this->config['apollo_master_api_key'])) {
+            $this->config['apollo_master_api_key'] = env('APOLLO_MASTER_API_KEY');
+        }
+        
         $this->client = new Client([
             'timeout' => 30.0,
         ]);

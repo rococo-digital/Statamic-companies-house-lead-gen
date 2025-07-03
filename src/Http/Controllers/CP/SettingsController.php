@@ -31,6 +31,7 @@ class SettingsController extends Controller
             $validated = validator($data, [
                 'companies_house_api_key' => 'nullable|string',
                 'apollo_api_key' => 'nullable|string',
+                'apollo_master_api_key' => 'nullable|string',
                 'instantly_api_key' => 'nullable|string',
                 'schedule.enabled' => 'nullable|boolean',
                 'logging.enabled' => 'nullable|boolean',
@@ -40,7 +41,8 @@ class SettingsController extends Controller
             // Laravel validator removes fields that fail validation, let's manually include all fields
             $allFields = [
                 'companies_house_api_key',
-                'apollo_api_key', 
+                'apollo_api_key',
+                'apollo_master_api_key',
                 'instantly_api_key',
                 'schedule.enabled',
                 'logging.enabled',
@@ -88,11 +90,13 @@ class SettingsController extends Controller
             // Update environment variables for API keys
             if (!empty($validated['companies_house_api_key']) || 
                 !empty($validated['apollo_api_key']) || 
+                !empty($validated['apollo_master_api_key']) ||
                 !empty($validated['instantly_api_key'])) {
                 
                 $envResult = $this->updateEnvFile([
                     'COMPANIES_HOUSE_API_KEY' => $validated['companies_house_api_key'] ?? '',
                     'APOLLO_API_KEY' => $validated['apollo_api_key'] ?? '',
+                    'APOLLO_MASTER_API_KEY' => $validated['apollo_master_api_key'] ?? '',
                     'INSTANTLY_API_KEY' => $validated['instantly_api_key'] ?? '',
                 ]);
                 Log::info('Environment file update result:', ['success' => $envResult]);
