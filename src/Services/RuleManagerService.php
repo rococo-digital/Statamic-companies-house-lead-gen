@@ -172,6 +172,15 @@ class RuleManagerService
                 Log::info("Processing company for rule '{$ruleKey}': {$companyName}");
 
                 try {
+                    // Check if we should pause due to too many rate limit errors
+                    if ($this->shouldPauseDueToRateLimits()) {
+                        $pauseTime = 300; // 5 minutes
+                        Log::warning("Too many rate limit errors detected. Pausing processing for {$pauseTime} seconds.");
+                        sleep($pauseTime);
+                        // Clear the error count after pausing
+                        Cache::forget('apollo_rate_limit_errors');
+                    }
+                    
                     // Find people for this company
                     $people = $this->apolloService->findPeopleForCompany($companyName);
                     $this->statsService->trackApiUsage($ruleKey, 'apollo', 'people_search');
@@ -188,6 +197,12 @@ class RuleManagerService
                     }
                 } catch (\Exception $e) {
                     Log::error("Error processing company {$companyName} for rule {$ruleKey}: " . $e->getMessage());
+                    
+                    // Track rate limit errors specifically
+                    if (strpos($e->getMessage(), '429') !== false || strpos($e->getMessage(), 'Too Many Requests') !== false) {
+                        $this->trackRateLimitError();
+                    }
+                    
                     continue;
                 }
 
@@ -454,5 +469,39 @@ class RuleManagerService
         }
         
         return strtoupper($country);
+    }
+
+    /**
+     * Track rate limit errors to detect when we need to pause processing
+     */
+    protected function trackRateLimitError(): void
+    {
+        $cacheKey = 'apollo_rate_limit_errors';
+        $errors = Cache::get($cacheKey, []);
+        
+        // Add current timestamp
+        $errors[] = time();
+        
+        // Keep only errors from the last 10 minutes
+        $tenMinutesAgo = time() - 600;
+        $errors = array_filter($errors, function($timestamp) use ($tenMinutesAgo) {
+            return $timestamp > $tenMinutesAgo;
+        });
+        
+        Cache::put($cacheKey, $errors, 600); // Cache for 10 minutes
+        
+        Log::warning("Rate limit error tracked. Total errors in last 10 minutes: " . count($errors));
+    }
+
+    /**
+     * Check if we should pause processing due to too many rate limit errors
+     */
+    protected function shouldPauseDueToRateLimits(): bool
+    {
+        $cacheKey = 'apollo_rate_limit_errors';
+        $errors = Cache::get($cacheKey, []);
+        
+        // If we have more than 5 rate limit errors in the last 10 minutes, pause
+        return count($errors) >= 5;
     }
 } 

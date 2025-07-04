@@ -38,6 +38,10 @@ class ManageRules extends Command
                 return $this->showStats($ruleKey);
             case 'test':
                 return $this->testRule($ruleKey);
+            case 'clear-cache':
+                return $this->clearCache();
+            case 'rate-limits':
+                return $this->showRateLimits();
             default:
                 $this->error("Unknown action: {$action}");
                 $this->showHelp();
@@ -325,6 +329,104 @@ class ManageRules extends Command
     }
 
     /**
+     * Clear rate limit caches and reset error tracking
+     */
+    protected function clearCache(): int
+    {
+        $this->info('🧹 Clearing rate limit caches...');
+        
+        // Clear Apollo rate limit cache
+        \Illuminate\Support\Facades\Cache::forget('apollo_rate_limits_people_search');
+        $this->line('✅ Cleared Apollo rate limit cache');
+        
+        // Clear rate limit error tracking
+        \Illuminate\Support\Facades\Cache::forget('apollo_rate_limit_errors');
+        $this->line('✅ Cleared rate limit error tracking');
+        
+        // Clear API usage tracking
+        $usageKeys = \Illuminate\Support\Facades\Cache::get('apollo_api_usage_*');
+        if ($usageKeys) {
+            foreach ($usageKeys as $key) {
+                \Illuminate\Support\Facades\Cache::forget($key);
+            }
+        }
+        $this->line('✅ Cleared API usage tracking');
+        
+        $this->info('🎉 All caches cleared successfully!');
+        $this->line('');
+        $this->comment('The system will now fetch fresh rate limit information from Apollo on the next request.');
+        
+        return 0;
+    }
+
+    /**
+     * Show current Apollo API rate limit status
+     */
+    protected function showRateLimits(): int
+    {
+        $this->info('📊 Apollo API Rate Limit Status');
+        $this->line('');
+
+        try {
+            // Get Apollo service instance
+            $apolloService = app(\Rococo\ChLeadGen\Services\ApolloService::class);
+            
+            // Get current rate limits
+            $rateLimits = $apolloService->getRateLimits();
+            
+            $this->line('<comment>Current Limits:</comment>');
+            $this->line("  Per Minute: {$rateLimits['per_minute']['used']}/{$rateLimits['per_minute']['limit']} ({$rateLimits['per_minute']['remaining']} remaining)");
+            $this->line("  Per Hour: {$rateLimits['per_hour']['used']}/{$rateLimits['per_hour']['limit']} ({$rateLimits['per_hour']['remaining']} remaining)");
+            $this->line("  Per Day: {$rateLimits['per_day']['used']}/{$rateLimits['per_day']['limit']} ({$rateLimits['per_day']['remaining']} remaining)");
+            
+            // Calculate percentages
+            $minutePercent = $rateLimits['per_minute']['limit'] > 0 ? round(($rateLimits['per_minute']['used'] / $rateLimits['per_minute']['limit']) * 100, 1) : 0;
+            $hourPercent = $rateLimits['per_hour']['limit'] > 0 ? round(($rateLimits['per_hour']['used'] / $rateLimits['per_hour']['limit']) * 100, 1) : 0;
+            $dayPercent = $rateLimits['per_day']['limit'] > 0 ? round(($rateLimits['per_day']['used'] / $rateLimits['per_day']['limit']) * 100, 1) : 0;
+            
+            $this->line('');
+            $this->line('<comment>Usage Percentages:</comment>');
+            $this->line("  Per Minute: {$minutePercent}%");
+            $this->line("  Per Hour: {$hourPercent}%");
+            $this->line("  Per Day: {$dayPercent}%");
+            
+            // Check for warnings
+            $this->line('');
+            if ($minutePercent > 80) {
+                $this->warn('⚠️  Minute limit is high - consider pausing processing');
+            }
+            if ($hourPercent > 80) {
+                $this->warn('⚠️  Hour limit is high - consider pausing processing');
+            }
+            if ($dayPercent > 80) {
+                $this->warn('⚠️  Day limit is high - consider pausing processing');
+            }
+            
+            if ($minutePercent <= 80 && $hourPercent <= 80 && $dayPercent <= 80) {
+                $this->info('✅ All rate limits are healthy');
+            }
+            
+            // Check for recent rate limit errors
+            $errorCache = \Illuminate\Support\Facades\Cache::get('apollo_rate_limit_errors', []);
+            $recentErrors = array_filter($errorCache, function($timestamp) {
+                return $timestamp > (time() - 600); // Last 10 minutes
+            });
+            
+            if (!empty($recentErrors)) {
+                $this->line('');
+                $this->warn('⚠️  Recent rate limit errors detected: ' . count($recentErrors) . ' in the last 10 minutes');
+                $this->comment('Consider running "clear-cache" to reset error tracking');
+            }
+            
+        } catch (\Exception $e) {
+            $this->error('❌ Error fetching rate limit status: ' . $e->getMessage());
+            return 1;
+        }
+        
+        return 0;
+    }
+
+    /**
      * Show help information
      */
     protected function showHelp(): void
@@ -335,11 +437,15 @@ class ManageRules extends Command
         $this->line('  show <rule>    - Show detailed information about a rule');
         $this->line('  stats <rule>   - Show statistics for a rule');
         $this->line('  test <rule>    - Test/run a specific rule');
+        $this->line('  clear-cache    - Clear rate limit caches and reset error tracking');
+        $this->line('  rate-limits    - Show current Apollo API rate limit status');
         $this->line('');
         $this->comment('Examples:');
         $this->line('  php artisan ch-lead-gen:rules list');
         $this->line('  php artisan ch-lead-gen:rules show six_month_companies');
         $this->line('  php artisan ch-lead-gen:rules stats confirmation_statement_missing');
         $this->line('  php artisan ch-lead-gen:rules test six_month_companies');
+        $this->line('  php artisan ch-lead-gen:rules clear-cache');
+        $this->line('  php artisan ch-lead-gen:rules rate-limits');
     }
 } 

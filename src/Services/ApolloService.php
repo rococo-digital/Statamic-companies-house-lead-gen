@@ -14,8 +14,8 @@ class ApolloService
     private const APOLLO_API_PEOPLE_SEARCH_URL = 'https://api.apollo.io/api/v1/mixed_people/search';
     private const APOLLO_API_BULK_PEOPLE_ENRICH_URL = 'https://api.apollo.io/api/v1/people/bulk_match';
     private const APOLLO_API_USAGE_STATS_URL = 'https://api.apollo.io/api/v1/usage_stats/api_usage_stats';
-    private const DEFAULT_RATE_LIMIT_PER_MINUTE = 50;
-    private const DEFAULT_MIN_REQUEST_INTERVAL = 1.2; // 1.2 seconds = 50 requests per minute
+    private const DEFAULT_RATE_LIMIT_PER_MINUTE = 50; // Conservative limit for people search
+    private const DEFAULT_MIN_REQUEST_INTERVAL = 2.0; // 2 seconds = 30 requests per minute (conservative)
 
     public function __construct()
     {
@@ -37,9 +37,9 @@ class ApolloService
     /**
      * Get current rate limits from Apollo API or cache
      */
-    private function getCurrentRateLimits()
+    private function getCurrentRateLimits($endpoint = 'people_search')
     {
-        $cacheKey = 'apollo_rate_limits';
+        $cacheKey = 'apollo_rate_limits_' . $endpoint;
         $cachedLimits = Cache::get($cacheKey);
         
         // Return cached limits if they're recent (less than 5 minutes old)
@@ -62,74 +62,66 @@ class ApolloService
             $data = json_decode($response->getBody()->getContents(), true);
             $headers = $response->getHeaders();
             
-            // Initialize limits with header values as fallback
+            // Initialize limits with conservative fallback values for people search
             $limits = [
                 'per_minute' => [
-                    'limit' => (int)($headers['x-rate-limit-minute'][0] ?? self::DEFAULT_RATE_LIMIT_PER_MINUTE),
-                    'remaining' => (int)($headers['x-minute-requests-left'][0] ?? self::DEFAULT_RATE_LIMIT_PER_MINUTE),
-                    'used' => (int)($headers['x-minute-usage'][0] ?? 0)
+                    'limit' => 50, // Conservative limit for people search
+                    'remaining' => 50,
+                    'used' => 0
                 ],
                 'per_hour' => [
-                    'limit' => (int)($headers['x-rate-limit-hourly'][0] ?? 200),
-                    'remaining' => (int)($headers['x-hourly-requests-left'][0] ?? 200),
-                    'used' => (int)($headers['x-hourly-usage'][0] ?? 0)
+                    'limit' => 200, // Conservative limit for people search
+                    'remaining' => 200,
+                    'used' => 0
                 ],
                 'per_day' => [
-                    'limit' => (int)($headers['x-rate-limit-24-hour'][0] ?? 600),
-                    'remaining' => (int)($headers['x-24-hour-requests-left'][0] ?? 600),
-                    'used' => (int)($headers['x-24-hour-usage'][0] ?? 0)
+                    'limit' => 600, // Conservative limit for people search
+                    'remaining' => 600,
+                    'used' => 0
                 ]
             ];
             
-            // If we have detailed quota data from the response, use it to enhance our limits
+            // If we have detailed quota data from the response, find the people search endpoint
             if (is_array($data) && !empty($data)) {
-                $totalDayLimit = 0;
-                $totalHourLimit = 0;
-                $totalMinuteLimit = 0;
-                $totalDayUsed = 0;
-                $totalHourUsed = 0;
-                $totalMinuteUsed = 0;
+                $peopleSearchEndpoint = null;
                 
-                foreach ($data as $endpoint => $usage) {
-                    if (isset($usage['day']['limit'])) {
-                        $totalDayLimit += $usage['day']['limit'];
-                        $totalDayUsed += $usage['day']['consumed'] ?? 0;
-                    }
-                    if (isset($usage['hour']['limit'])) {
-                        $totalHourLimit += $usage['hour']['limit'];
-                        $totalHourUsed += $usage['hour']['consumed'] ?? 0;
-                    }
-                    if (isset($usage['minute']['limit'])) {
-                        $totalMinuteLimit += $usage['minute']['limit'];
-                        $totalMinuteUsed += $usage['minute']['consumed'] ?? 0;
+                // Look for the people search endpoint in the data
+                foreach ($data as $endpointKey => $usage) {
+                    if (strpos($endpointKey, 'people') !== false || strpos($endpointKey, 'search') !== false) {
+                        $peopleSearchEndpoint = $usage;
+                        break;
                     }
                 }
                 
-                // Update limits with actual quota data if available
-                $safetyMargin = $this->config['apollo']['safety_margin'] ?? 0.8;
-                
-                if ($totalDayLimit > 0) {
-                    $adjustedDayLimit = (int)($totalDayLimit * $safetyMargin);
-                    $limits['per_day']['limit'] = $adjustedDayLimit;
-                    $limits['per_day']['used'] = $totalDayUsed;
-                    $limits['per_day']['remaining'] = max(0, $adjustedDayLimit - $totalDayUsed);
+                // If we found the people search endpoint, use its specific limits
+                if ($peopleSearchEndpoint) {
+                    $safetyMargin = $this->config['apollo']['safety_margin'] ?? 0.6;
+                    
+                    if (isset($peopleSearchEndpoint['day']['limit'])) {
+                        $adjustedDayLimit = (int)($peopleSearchEndpoint['day']['limit'] * $safetyMargin);
+                        $limits['per_day']['limit'] = $adjustedDayLimit;
+                        $limits['per_day']['used'] = $peopleSearchEndpoint['day']['consumed'] ?? 0;
+                        $limits['per_day']['remaining'] = max(0, $adjustedDayLimit - $limits['per_day']['used']);
+                    }
+                    
+                    if (isset($peopleSearchEndpoint['hour']['limit'])) {
+                        $adjustedHourLimit = (int)($peopleSearchEndpoint['hour']['limit'] * $safetyMargin);
+                        $limits['per_hour']['limit'] = $adjustedHourLimit;
+                        $limits['per_hour']['used'] = $peopleSearchEndpoint['hour']['consumed'] ?? 0;
+                        $limits['per_hour']['remaining'] = max(0, $adjustedHourLimit - $limits['per_hour']['used']);
+                    }
+                    
+                    if (isset($peopleSearchEndpoint['minute']['limit'])) {
+                        $adjustedMinuteLimit = (int)($peopleSearchEndpoint['minute']['limit'] * $safetyMargin);
+                        $limits['per_minute']['limit'] = $adjustedMinuteLimit;
+                        $limits['per_minute']['used'] = $peopleSearchEndpoint['minute']['consumed'] ?? 0;
+                        $limits['per_minute']['remaining'] = max(0, $adjustedMinuteLimit - $limits['per_minute']['used']);
+                    }
+                    
+                    Log::debug("Using people search specific rate limits: " . json_encode($limits));
+                } else {
+                    Log::debug("People search endpoint not found in API response, using conservative fallback limits");
                 }
-                
-                if ($totalHourLimit > 0) {
-                    $adjustedHourLimit = (int)($totalHourLimit * $safetyMargin);
-                    $limits['per_hour']['limit'] = $adjustedHourLimit;
-                    $limits['per_hour']['used'] = $totalHourUsed;
-                    $limits['per_hour']['remaining'] = max(0, $adjustedHourLimit - $totalHourUsed);
-                }
-                
-                if ($totalMinuteLimit > 0) {
-                    $adjustedMinuteLimit = (int)($totalMinuteLimit * $safetyMargin);
-                    $limits['per_minute']['limit'] = $adjustedMinuteLimit;
-                    $limits['per_minute']['used'] = $totalMinuteUsed;
-                    $limits['per_minute']['remaining'] = max(0, $adjustedMinuteLimit - $totalMinuteUsed);
-                }
-                
-                Log::debug("Enhanced Apollo rate limits with quota data: " . json_encode($limits));
             }
             
             // Cache the limits for 5 minutes
@@ -138,13 +130,13 @@ class ApolloService
                 'timestamp' => time()
             ], 300);
             
-            Log::debug("Updated Apollo rate limits from API: " . json_encode($limits));
+            Log::debug("Updated Apollo rate limits for {$endpoint}: " . json_encode($limits));
             return $limits;
             
         } catch (\Exception $e) {
             Log::warning("Failed to fetch Apollo rate limits, using fallback limits: " . $e->getMessage());
             $fallbackLimits = $this->config['apollo']['fallback_limits'] ?? [
-                'per_minute' => self::DEFAULT_RATE_LIMIT_PER_MINUTE,
+                'per_minute' => 50, // Conservative limit for people search
                 'per_hour' => 200,
                 'per_day' => 600
             ];
@@ -158,34 +150,42 @@ class ApolloService
     }
 
     /**
-     * Dynamic rate limiting based on current Apollo API limits
+     * Conservative rate limiting based on current Apollo API limits
      */
-    private function rateLimit($endpoint = 'general')
+    private function rateLimit($endpoint = 'people_search')
     {
-        $rateLimits = $this->getCurrentRateLimits();
+        $rateLimits = $this->getCurrentRateLimits($endpoint);
         
         // Check if we're approaching limits
         $minuteLimit = $rateLimits['per_minute'];
         $hourLimit = $rateLimits['per_hour'];
         $dayLimit = $rateLimits['per_day'];
         
-        // Calculate dynamic intervals based on remaining requests
-        $minuteRemaining = max(1, $minuteLimit['remaining']);
-        $hourRemaining = max(1, $hourLimit['remaining']);
-        $dayRemaining = max(1, $dayLimit['remaining']);
+        // Use a conservative approach - always maintain at least 3 seconds between requests
+        $baseInterval = self::DEFAULT_MIN_REQUEST_INTERVAL;
         
-        // Use the most restrictive interval
-        $minuteInterval = 60.0 / $minuteRemaining;
-        $hourInterval = 3600.0 / $hourRemaining;
-        $dayInterval = 86400.0 / $dayRemaining;
+        // If we're running low on minute limits, increase the interval significantly
+        if ($minuteLimit['remaining'] <= 5) {
+            $baseInterval = 10.0; // 10 seconds when very low on minute limits
+        } elseif ($minuteLimit['remaining'] <= 10) {
+            $baseInterval = 6.0; // 6 seconds when low on minute limits
+        } elseif ($minuteLimit['remaining'] <= 20) {
+            $baseInterval = 4.0; // 4 seconds when moderate on minute limits
+        }
         
-        $dynamicInterval = max($minuteInterval, $hourInterval, $dayInterval);
+        // If we're running low on hour limits, increase the interval
+        if ($hourLimit['remaining'] <= 20) {
+            $baseInterval = max($baseInterval, 5.0);
+        }
         
-        // Apply safety margin (80% of calculated interval)
-        $safeInterval = $dynamicInterval * 1.25;
+        // If we're running low on day limits, increase the interval
+        if ($dayLimit['remaining'] <= 50) {
+            $baseInterval = max($baseInterval, 8.0);
+        }
         
-        // Ensure minimum interval of 0.5 seconds
-        $finalInterval = max(0.5, $safeInterval);
+        // Add some randomness to prevent thundering herd
+        $jitter = (rand(0, 100) / 100) * 1.0; // 0-1 second of jitter
+        $finalInterval = $baseInterval + $jitter;
         
         if ($this->lastRequestTime) {
             $timeSinceLastRequest = microtime(true) - $this->lastRequestTime;
@@ -194,7 +194,7 @@ class ApolloService
                 $sleepMicroseconds = (int)($sleepTime * 1000000);
                 
                 if ($sleepMicroseconds > 0) {
-                    Log::debug("Dynamic rate limiting: sleeping for {$sleepTime}s (minute: {$minuteRemaining} left, hour: {$hourRemaining} left, day: {$dayRemaining} left)");
+                    Log::debug("Conservative rate limiting: sleeping for {$sleepTime}s (minute: {$minuteLimit['remaining']} left, hour: {$hourLimit['remaining']} left, day: {$dayLimit['remaining']} left)");
                     usleep($sleepMicroseconds);
                 }
             }
@@ -226,7 +226,7 @@ class ApolloService
         Cache::put($cacheKey, $newUsage, 120); // Store for 2 minutes
         
         // Get current rate limits for comparison
-        $rateLimits = $this->getCurrentRateLimits();
+        $rateLimits = $this->getCurrentRateLimits('people_search');
         $minuteLimit = $rateLimits['per_minute']['limit'];
         
         if ($newUsage > $minuteLimit) {
@@ -234,6 +234,44 @@ class ApolloService
         }
         
         Log::debug("Apollo API usage: {$newUsage} requests in current minute for {$endpoint} (limit: {$minuteLimit})");
+    }
+
+    /**
+     * Make API request with retry logic for 429 errors
+     */
+    private function makeApiRequestWithRetry(callable $requestCallback, $operationName = 'API request')
+    {
+        $maxRetries = 3;
+        $baseDelay = 30; // Start with 30 seconds delay
+        
+        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            try {
+                return $requestCallback();
+            } catch (\GuzzleHttp\Exception\ClientException $e) {
+                $statusCode = $e->getResponse()->getStatusCode();
+                
+                if ($statusCode === 429 && $attempt < $maxRetries) {
+                    // Clear rate limit cache to get fresh information
+                    Cache::forget('apollo_rate_limits');
+                    
+                    $delay = $baseDelay * pow(2, $attempt - 1); // Exponential backoff: 30s, 60s, 120s
+                    Log::warning("Rate limit hit for {$operationName} (attempt {$attempt}/{$maxRetries}). Waiting {$delay} seconds before retry.");
+                    sleep($delay);
+                    continue;
+                }
+                
+                // For other client errors or final retry attempt, re-throw
+                Log::error("Error in {$operationName} (attempt {$attempt}/{$maxRetries}): " . $e->getMessage());
+                throw $e;
+            } catch (\Exception $e) {
+                // For non-HTTP errors, re-throw immediately
+                Log::error("Error in {$operationName} (attempt {$attempt}/{$maxRetries}): " . $e->getMessage());
+                throw $e;
+            }
+        }
+        
+        // This should never be reached, but just in case
+        throw new \Exception("Max retries exceeded for {$operationName}");
     }
 
     public function findPeopleForCompany($companyName)
@@ -247,8 +285,8 @@ class ApolloService
             throw new \Exception("Apollo API rate limits reached. Please wait before making more requests.");
         }
         
-        try {
-            // Apply dynamic rate limiting before making request
+        return $this->makeApiRequestWithRetry(function() use ($companyName) {
+            // Apply conservative rate limiting before making request
             $this->rateLimit('people_search');
             $this->trackApiUsage('people_search');
             
@@ -287,11 +325,7 @@ class ApolloService
 
             Log::info("Found " . count($people) . " potential people for {$companyName}");
             return $people;
-
-        } catch (\Exception $e) {
-            Log::error("Error querying Apollo People Search for {$companyName}: " . $e->getMessage());
-            throw $e;
-        }
+        }, "Apollo People Search for {$companyName}");
     }
 
     public function enrichPeopleDetails($people)
@@ -326,15 +360,15 @@ class ApolloService
                 continue;
             }
 
-            try {
-                // Check if we can make API calls
-                $canProceed = $this->canMakeApiCall();
-                if (!$canProceed['can_proceed']) {
-                    Log::warning("Cannot make Apollo API call - rate limits reached: minute: {$canProceed['minute_remaining']}, hour: {$canProceed['hour_remaining']}, day: {$canProceed['day_remaining']}");
-                    throw new \Exception("Apollo API rate limits reached. Please wait before making more requests.");
-                }
-                
-                // Apply dynamic rate limiting before making request
+            // Check if we can make API calls
+            $canProceed = $this->canMakeApiCall();
+            if (!$canProceed['can_proceed']) {
+                Log::warning("Cannot make Apollo API call - rate limits reached: minute: {$canProceed['minute_remaining']}, hour: {$canProceed['hour_remaining']}, day: {$canProceed['day_remaining']}");
+                throw new \Exception("Apollo API rate limits reached. Please wait before making more requests.");
+            }
+            
+            $enrichedData = $this->makeApiRequestWithRetry(function() use ($detailsForApi) {
+                // Apply conservative rate limiting before making request
                 $this->rateLimit('bulk_enrich');
                 $this->trackApiUsage('bulk_enrich');
 
@@ -351,25 +385,21 @@ class ApolloService
                 ]);
 
                 $data = json_decode($response->getBody()->getContents(), true);
-                $contactsInResponse = $data['matches'] ?? $data['people'] ?? [];
+                return $data['matches'] ?? $data['people'] ?? [];
+            }, "Bulk People Enrichment batch " . ($batchIndex + 1));
 
-                if (!empty($contactsInResponse)) {
-                    foreach ($contactsInResponse as $personIndex => $enrichedPerson) {
-                        if (!empty($enrichedPerson['email'])) {
-                            $foundContactsWithEmail[] = [
-                                'name' => $enrichedPerson['name'] ?? 'N/A',
-                                'email' => $enrichedPerson['email'],
-                                'title' => $enrichedPerson['title'] ?? 'N/A',
-                                'company_name_input' => $batch[$personIndex]['company_name_input'] ?? 'Unknown Company'
-                            ];
-                            Log::info("Found email for: {$enrichedPerson['email']}");
-                        }
+            if (!empty($enrichedData)) {
+                foreach ($enrichedData as $personIndex => $enrichedPerson) {
+                    if (!empty($enrichedPerson['email'])) {
+                        $foundContactsWithEmail[] = [
+                            'name' => $enrichedPerson['name'] ?? 'N/A',
+                            'email' => $enrichedPerson['email'],
+                            'title' => $enrichedPerson['title'] ?? 'N/A',
+                            'company_name_input' => $batch[$personIndex]['company_name_input'] ?? 'Unknown Company'
+                        ];
+                        Log::info("Found email for: {$enrichedPerson['email']}");
                     }
                 }
-
-            } catch (\Exception $e) {
-                Log::error("Error during Bulk People Enrichment: " . $e->getMessage());
-                throw $e;
             }
         }
 
@@ -384,7 +414,7 @@ class ApolloService
      */
     public function getRateLimits()
     {
-        return $this->getCurrentRateLimits();
+        return $this->getCurrentRateLimits('people_search');
     }
 
     /**
@@ -394,7 +424,7 @@ class ApolloService
      */
     public function getCurrentDailyLimit()
     {
-        $rateLimits = $this->getCurrentRateLimits();
+        $rateLimits = $this->getCurrentRateLimits('people_search');
         return $rateLimits['per_day']['limit'];
     }
 
@@ -405,7 +435,7 @@ class ApolloService
      */
     public function getCurrentDailyUsage()
     {
-        $rateLimits = $this->getCurrentRateLimits();
+        $rateLimits = $this->getCurrentRateLimits('people_search');
         return $rateLimits['per_day']['used'];
     }
 
@@ -416,7 +446,7 @@ class ApolloService
      */
     public function getRemainingDailyRequests()
     {
-        $rateLimits = $this->getCurrentRateLimits();
+        $rateLimits = $this->getCurrentRateLimits('people_search');
         return $rateLimits['per_day']['remaining'];
     }
 
@@ -427,7 +457,7 @@ class ApolloService
      */
     public function canMakeApiCall()
     {
-        $rateLimits = $this->getCurrentRateLimits();
+        $rateLimits = $this->getCurrentRateLimits('people_search');
         
         $minuteRemaining = $rateLimits['per_minute']['remaining'];
         $hourRemaining = $rateLimits['per_hour']['remaining'];
