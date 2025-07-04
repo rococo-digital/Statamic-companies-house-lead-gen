@@ -5,6 +5,7 @@ namespace Rococo\ChLeadGen;
 use Statamic\Providers\AddonServiceProvider;
 use Statamic\Facades\CP\Nav;
 use Statamic\Facades\Permission;
+use Illuminate\Support\Facades\Schedule;
 use Rococo\ChLeadGen\Commands\RunLeadGeneration;
 use Rococo\ChLeadGen\Commands\ManageRules;
 use Rococo\ChLeadGen\Http\Controllers\CP\DashboardController;
@@ -58,6 +59,9 @@ class ServiceProvider extends AddonServiceProvider
         // Remove problematic asset publishing for now
         // Assets will be handled by Vite instead
         
+        // Register the scheduled command
+        $this->registerScheduledCommands();
+        
         Nav::extend(function ($nav) {
             $nav->create('CH Lead Gen')
                 ->section('Tools')
@@ -74,6 +78,21 @@ class ServiceProvider extends AddonServiceProvider
         Permission::register('view ch-lead-gen')
             ->label('View CH Lead Gen')
             ->description('Allow viewing the CH Lead Gen dashboard');
+    }
+
+    /**
+     * Register scheduled commands for the addon
+     */
+    protected function registerScheduledCommands()
+    {
+        // Only register if the application is running in console or if we're in a scheduled context
+        if ($this->app->runningInConsole() || $this->app->bound('schedule')) {
+            Schedule::command('ch-lead-gen:run')
+                ->everyMinute()
+                ->withoutOverlapping()
+                ->runInBackground()
+                ->description('Run Companies House lead generation scheduled rules');
+        }
     }
 
     public function register()
