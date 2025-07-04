@@ -22,6 +22,8 @@ class WebhookService
      */
     public function sendRuleResults(string $ruleKey, array $rule, array $results): bool
     {
+        Log::info("WebhookService::sendRuleResults called for rule '{$ruleKey}'");
+        
         if (!$this->isWebhookEnabled($rule)) {
             Log::info("Webhook disabled for rule '{$ruleKey}', skipping webhook notification");
             return true; // Not enabled, so consider it successful
@@ -29,6 +31,11 @@ class WebhookService
 
         $webhookUrl = $rule['webhook']['url'] ?? '';
         $webhookSecret = $rule['webhook']['secret'] ?? '';
+
+        Log::info("Webhook configuration for rule '{$ruleKey}':", [
+            'webhook_url' => $webhookUrl ? 'configured' : 'not configured',
+            'webhook_secret' => $webhookSecret ? 'configured' : 'not configured'
+        ]);
 
         if (empty($webhookUrl)) {
             Log::warning("Webhook enabled for rule '{$ruleKey}' but no URL configured");
@@ -72,7 +79,15 @@ class WebhookService
     private function isWebhookEnabled(array $rule): bool
     {
         $enabled = $rule['webhook']['enabled'] ?? false;
-        return $enabled === true || $enabled === '1' || $enabled === 1;
+        $result = $enabled === true || $enabled === '1' || $enabled === 1;
+        
+        Log::info("Webhook enabled check:", [
+            'raw_enabled_value' => $enabled,
+            'enabled_type' => gettype($enabled),
+            'result' => $result
+        ]);
+        
+        return $result;
     }
 
     /**

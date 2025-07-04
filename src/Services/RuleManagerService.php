@@ -251,13 +251,26 @@ class RuleManagerService
                 'contacts' => $allContacts, // Include contact details for webhook
             ];
 
+            // Check webhook configuration before attempting to send
+            $webhookEnabled = $rule['webhook']['enabled'] ?? false;
+            $webhookUrl = $rule['webhook']['url'] ?? '';
+            
+            Log::info("Webhook configuration check for rule '{$ruleKey}':", [
+                'webhook_enabled' => $webhookEnabled,
+                'webhook_url' => $webhookUrl ? 'configured' : 'not configured',
+                'webhook_url_length' => strlen($webhookUrl)
+            ]);
+
             try {
                 $webhookSent = $this->webhookService->sendRuleResults($ruleKey, $rule, $results);
                 if ($webhookSent) {
                     Log::info("Webhook sent successfully for rule: {$ruleKey}");
+                } else {
+                    Log::warning("Webhook service returned false for rule: {$ruleKey}");
                 }
             } catch (\Exception $e) {
                 Log::error("Failed to send webhook for rule {$ruleKey}: " . $e->getMessage());
+                Log::error("Webhook exception details: " . $e->getTraceAsString());
                 // Don't fail the entire rule execution if webhook fails
             }
 
