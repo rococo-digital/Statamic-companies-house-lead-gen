@@ -75,9 +75,25 @@ class ServiceProvider extends AddonServiceProvider
                 ]);
         });
 
+        // Register permissions
         Permission::register('view ch-lead-gen')
             ->label('View CH Lead Gen')
             ->description('Allow viewing the CH Lead Gen dashboard');
+            
+        Permission::register('edit ch-lead-gen')
+            ->label('Edit CH Lead Gen')
+            ->description('Allow editing rules and settings');
+            
+        Permission::register('create ch-lead-gen')
+            ->label('Create CH Lead Gen Rules')
+            ->description('Allow creating new lead generation rules');
+            
+        Permission::register('delete ch-lead-gen')
+            ->label('Delete CH Lead Gen Rules')
+            ->description('Allow deleting lead generation rules');
+
+        // Grant permissions to super users and admin users
+        $this->grantPermissionToAdmins();
     }
 
     /**
@@ -92,6 +108,44 @@ class ServiceProvider extends AddonServiceProvider
                 ->withoutOverlapping()
                 ->runInBackground()
                 ->description('Run Companies House lead generation scheduled rules');
+        }
+    }
+
+    /**
+     * Grant the ch-lead-gen permissions to super users and admin users
+     */
+    protected function grantPermissionToAdmins()
+    {
+        // Get all users
+        $users = \Statamic\Facades\User::all();
+        
+        $permissions = [
+            'view ch-lead-gen',
+            'edit ch-lead-gen', 
+            'create ch-lead-gen',
+            'delete ch-lead-gen'
+        ];
+        
+        foreach ($users as $user) {
+            // Grant permissions to super users
+            if ($user->isSuper()) {
+                $user->permissions($permissions);
+                $user->save();
+                continue;
+            }
+            
+            // Grant permissions to users in admin group
+            if ($user->groups()->contains('admin')) {
+                $user->permissions($permissions);
+                $user->save();
+                continue;
+            }
+            
+            // Grant permissions to users with admin role
+            if ($user->roles()->contains('admin')) {
+                $user->permissions($permissions);
+                $user->save();
+            }
         }
     }
 
