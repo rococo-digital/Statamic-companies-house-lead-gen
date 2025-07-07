@@ -28,43 +28,101 @@
                         <svg class="h-5 w-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
                             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
                         </svg>
-                        <span class="font-medium">Rate limits reached - cannot make API calls</span>
+                        <span class="font-medium">Insufficient API quota - cannot make API calls</span>
                     </div>
                 @endif
-                
-                <div class="text-sm text-gray-600">
-                    Minute: {{ $canMakeApiCall['minute_remaining'] }} remaining | 
-                    Hour: {{ $canMakeApiCall['hour_remaining'] }} remaining | 
-                    Day: {{ $canMakeApiCall['day_remaining'] }} remaining
+            </div>
+            
+            <!-- Actual API Usage -->
+            <div class="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <div class="text-sm font-medium text-blue-800 mb-2">Actual API Usage (Raw Limits)</div>
+                <div class="text-sm text-blue-700">
+                    @php
+                        $rawLimits = $canMakeApiCall['raw_limits'] ?? $rawApiLimits;
+                        $minuteUsed = $rawLimits['per_minute']['used'] ?? 0;
+                        $minuteLimit = $rawLimits['per_minute']['limit'] ?? 0;
+                        $hourUsed = $rawLimits['per_hour']['used'] ?? 0;
+                        $hourLimit = $rawLimits['per_hour']['limit'] ?? 0;
+                        $dayUsed = $rawLimits['per_day']['used'] ?? 0;
+                        $dayLimit = $rawLimits['per_day']['limit'] ?? 0;
+                    @endphp
+                    Minute: {{ $minuteUsed }}/{{ $minuteLimit }} ({{ $canMakeApiCall['minute_remaining'] }} remaining, min: {{ $canMakeApiCall['minute_threshold'] ?? 10 }}) | 
+                    Hour: {{ $hourUsed }}/{{ $hourLimit }} ({{ $canMakeApiCall['hour_remaining'] }} remaining, min: {{ $canMakeApiCall['hour_threshold'] ?? 50 }}) | 
+                    Day: {{ $dayUsed }}/{{ $dayLimit }} ({{ $canMakeApiCall['day_remaining'] }} remaining, min: {{ $canMakeApiCall['day_threshold'] ?? 25 }})
+                </div>
+                <div class="text-xs text-blue-600 mt-1">
+                    These are the actual API usage and remaining requests from Apollo. The system checks if remaining requests meet minimum thresholds for rule execution.
                 </div>
             </div>
+            
+            <!-- Adjusted Limits (with safety margin) -->
+            @if(!empty($canMakeApiCall['adjusted_limits']))
+                <div class="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                    <div class="text-sm font-medium text-gray-800 mb-2">Adjusted Limits (with {{ config('ch-lead-gen.apollo.safety_margin', 0.6) * 100 }}% safety margin)</div>
+                    <div class="text-sm text-gray-700">
+                        @php
+                            $adjustedLimits = $canMakeApiCall['adjusted_limits'];
+                        @endphp
+                        Minute: {{ $adjustedLimits['per_minute']['used'] ?? 0 }}/{{ $adjustedLimits['per_minute']['limit'] ?? 0 }} ({{ $adjustedLimits['per_minute']['remaining'] ?? 0 }} remaining) | 
+                        Hour: {{ $adjustedLimits['per_hour']['used'] ?? 0 }}/{{ $adjustedLimits['per_hour']['limit'] ?? 0 }} ({{ $adjustedLimits['per_hour']['remaining'] ?? 0 }} remaining) | 
+                        Day: {{ $adjustedLimits['per_day']['used'] ?? 0 }}/{{ $adjustedLimits['per_day']['limit'] ?? 0 }} ({{ $adjustedLimits['per_day']['remaining'] ?? 0 }} remaining)
+                    </div>
+                    <div class="text-xs text-gray-600 mt-1">
+                        These are the adjusted limits used by the system's rate limiting (with safety margin applied).
+                    </div>
+                </div>
+            @endif
+            
+            <!-- Warning when close to thresholds or high usage -->
+            @if($canMakeApiCall['can_proceed'])
+                @php
+                    $rawLimits = $canMakeApiCall['raw_limits'] ?? $rawApiLimits;
+                    $minuteClose = $canMakeApiCall['minute_remaining'] <= ($canMakeApiCall['minute_threshold'] ?? 10) * 1.5;
+                    $hourClose = $canMakeApiCall['hour_remaining'] <= ($canMakeApiCall['hour_threshold'] ?? 50) * 1.5;
+                    $dayClose = $canMakeApiCall['day_remaining'] <= ($canMakeApiCall['day_threshold'] ?? 25) * 1.5;
+                    
+                    // Check for high usage percentages
+                    $dayUsagePercent = $rawLimits['per_day']['limit'] > 0 ? round(($rawLimits['per_day']['used'] / $rawLimits['per_day']['limit']) * 100, 1) : 0;
+                    $hourUsagePercent = $rawLimits['per_hour']['limit'] > 0 ? round(($rawLimits['per_hour']['used'] / $rawLimits['per_hour']['limit']) * 100, 1) : 0;
+                    $minuteUsagePercent = $rawLimits['per_minute']['limit'] > 0 ? round(($rawLimits['per_minute']['used'] / $rawLimits['per_minute']['limit']) * 100, 1) : 0;
+                    
+                    $highDayUsage = $dayUsagePercent >= 90;
+                    $highHourUsage = $hourUsagePercent >= 90;
+                    $highMinuteUsage = $minuteUsagePercent >= 90;
+                @endphp
+                @if($minuteClose || $hourClose || $dayClose || $highDayUsage || $highHourUsage || $highMinuteUsage)
+                    <div class="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                        <div class="text-sm font-medium text-yellow-800 mb-2">⚠️ API Quota Warning</div>
+                        <div class="text-sm text-yellow-700">
+                            @if($dayClose)
+                                <div>• Daily quota is running low ({{ $canMakeApiCall['day_remaining'] }} remaining)</div>
+                            @endif
+                            @if($hourClose)
+                                <div>• Hourly quota is running low ({{ $canMakeApiCall['hour_remaining'] }} remaining)</div>
+                            @endif
+                            @if($minuteClose)
+                                <div>• Minute quota is running low ({{ $canMakeApiCall['minute_remaining'] }} remaining)</div>
+                            @endif
+                            @if($highDayUsage)
+                                <div>• Daily usage is very high ({{ $dayUsagePercent }}% used)</div>
+                            @endif
+                            @if($highHourUsage)
+                                <div>• Hourly usage is very high ({{ $hourUsagePercent }}% used)</div>
+                            @endif
+                            @if($highMinuteUsage)
+                                <div>• Minute usage is very high ({{ $minuteUsagePercent }}% used)</div>
+                            @endif
+                        </div>
+                        <div class="text-xs text-yellow-600 mt-1">
+                            Consider pausing rule execution until quota resets or upgrading your Apollo plan.
+                        </div>
+                    </div>
+                @endif
+            @endif
         </div>
     @endif
 
     @if(!empty($apolloApiUsage) && !isset($apolloApiUsage['error']))
-        <!-- Current Usage Summary -->
-        <div class="card p-4 mb-6">
-            <h2 class="mb-4">Current Usage Summary</h2>
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div class="text-center p-4 bg-blue-50 rounded-lg">
-                    <div class="text-2xl font-bold text-blue-600">{{ number_format($apolloApiUsage['total_requests_today'] ?? 0) }}</div>
-                    <div class="text-blue-800">Today's Requests</div>
-                </div>
-                <div class="text-center p-4 bg-green-50 rounded-lg">
-                    <div class="text-2xl font-bold text-green-600">{{ number_format($apolloApiUsage['total_requests_this_month'] ?? 0) }}</div>
-                    <div class="text-green-800">This Month</div>
-                </div>
-                <div class="text-center p-4 bg-purple-50 rounded-lg">
-                    <div class="text-2xl font-bold text-purple-600">{{ number_format($apolloApiUsage['total_requests_this_year'] ?? 0) }}</div>
-                    <div class="text-purple-800">This Year</div>
-                </div>
-                <div class="text-center p-4 bg-orange-50 rounded-lg">
-                    <div class="text-2xl font-bold text-orange-600">{{ number_format($apolloApiUsage['plan_requests_per_month'] ?? 0) }}</div>
-                    <div class="text-orange-800">Monthly Limit</div>
-                </div>
-            </div>
-        </div>
-
         <!-- Rate Limits -->
         @if(!empty($apolloApiUsage['rate_limits']))
             <div class="card p-4 mb-6">
@@ -88,40 +146,6 @@
                             @if($percentage >= 80)
                                 <div class="text-xs text-red-600 mt-1">⚠️ Approaching limit</div>
                             @endif
-                        </div>
-                    @endforeach
-                </div>
-            </div>
-        @endif
-
-        <!-- Overall Quota Summary -->
-        @if(!empty($apolloApiUsage['overall_quota']))
-            <div class="card p-4 mb-6">
-                <h2 class="mb-4">Overall Quota Summary</h2>
-                
-                <!-- Dynamic Limits Info -->
-                <div class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                    <div class="text-sm text-blue-800">
-                        <strong>Dynamic Limits Active:</strong> The system automatically adjusts rate limits based on your actual Apollo API quota.
-                        <br>
-                        <strong>Safety Margin:</strong> {{ config('ch-lead-gen.apollo.safety_margin', 0.8) * 100 }}% of available quota is used to prevent hitting limits.
-                    </div>
-                </div>
-                
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    @foreach(['day', 'hour', 'minute'] as $period)
-                        @php
-                            $quota = $apolloApiUsage['overall_quota'][$period];
-                            $percentage = $quota['percentage_used'] ?? 0;
-                            $colorClass = $percentage >= 80 ? 'text-red-600' : ($percentage >= 60 ? 'text-yellow-600' : 'text-green-600');
-                        @endphp
-                        <div class="p-4 border rounded-lg">
-                            <div class="text-sm text-gray-500 mb-1">{{ ucfirst($period) }} Quota</div>
-                            <div class="text-lg font-medium {{ $colorClass }}">
-                                {{ number_format($quota['total_consumed']) }} / {{ number_format($quota['total_limit']) }}
-                            </div>
-                            <div class="text-sm text-gray-500">{{ $percentage }}% used</div>
-                            <div class="text-xs text-gray-400">{{ number_format($quota['total_remaining']) }} remaining</div>
                         </div>
                     @endforeach
                 </div>

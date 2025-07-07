@@ -9,6 +9,7 @@ use Rococo\ChLeadGen\Http\Controllers\CP\ApolloStatsController;
 Route::name('ch-lead-gen.')->prefix('ch-lead-gen')->middleware('can:view ch-lead-gen')->group(function () {
     Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
     Route::post('/run', [DashboardController::class, 'run'])->name('run');
+    Route::post('/stop', [DashboardController::class, 'stop'])->name('stop');
     
     Route::get('/logs', [DashboardController::class, 'logs'])->name('logs');
     

@@ -8,16 +8,20 @@ use Statamic\Facades\CP\Toast;
 use Illuminate\Support\Facades\Log;
 use Rococo\ChLeadGen\Services\RuleManagerService;
 use Rococo\ChLeadGen\Services\StatsService;
+use Rococo\ChLeadGen\Services\ApolloService;
+use Rococo\ChLeadGen\Services\JobTrackingService;
 
 class DashboardController extends Controller
 {
     protected $ruleManagerService;
     protected $statsService;
+    protected $apolloService;
 
-    public function __construct(RuleManagerService $ruleManagerService, StatsService $statsService)
+    public function __construct(RuleManagerService $ruleManagerService, StatsService $statsService, ApolloService $apolloService)
     {
         $this->ruleManagerService = $ruleManagerService;
         $this->statsService = $statsService;
+        $this->apolloService = $apolloService;
     }
 
     public function index()
@@ -29,11 +33,29 @@ class DashboardController extends Controller
         // Get internal API usage tracking
         $internalApiUsage = $this->statsService->getOverallApiUsage(7);
 
+        // Get Apollo API usage for quota warning
+        $apolloApiUsage = null;
+        $canMakeApiCall = null;
+        try {
+            $apolloApiUsage = $this->apolloService->getApiUsageStats();
+            $canMakeApiCall = $this->apolloService->canMakeApiCall();
+        } catch (\Exception $e) {
+            // Log error but don't fail the dashboard
+            Log::warning('Failed to fetch Apollo API usage for dashboard: ' . $e->getMessage());
+        }
+
+        // Get current running job
+        $jobTrackingService = app(JobTrackingService::class);
+        $currentJob = $jobTrackingService->getMostRecentJob();
+
         return view('ch-lead-gen::dashboard', [
             'config' => config('ch-lead-gen'),
             'rules' => $rules,
             'rulesStats' => $rulesStats,
             'internalApiUsage' => $internalApiUsage,
+            'apolloApiUsage' => $apolloApiUsage,
+            'canMakeApiCall' => $canMakeApiCall,
+            'currentJob' => $currentJob,
         ]);
     }
 
@@ -45,23 +67,28 @@ class DashboardController extends Controller
             $ruleKey = $request->input('rule_key');
             $forceRun = $request->boolean('force_run', false);
             
+            // Generate job ID for tracking
+            $jobTrackingService = app(JobTrackingService::class);
+            $jobId = $jobTrackingService->generateJobId();
+            
             if ($ruleKey) {
                 // Run specific rule
                 Log::info("Dashboard: Running specific rule: {$ruleKey}");
-                \Rococo\ChLeadGen\Jobs\RunLeadGeneration::dispatchRule($ruleKey, $forceRun);
+                \Rococo\ChLeadGen\Jobs\RunLeadGeneration::dispatchRule($ruleKey, $forceRun, $jobId);
                 $message = "Lead generation process started for rule: {$ruleKey}";
             } else {
                 // Run all scheduled rules (legacy behavior)
                 Log::info('Dashboard: Running all scheduled rules');
-                \Rococo\ChLeadGen\Jobs\RunLeadGeneration::dispatchScheduled();
+                \Rococo\ChLeadGen\Jobs\RunLeadGeneration::dispatchScheduled($jobId);
                 $message = 'Lead generation process started for all scheduled rules';
             }
             
-            Log::info('=== Dashboard: Job dispatched successfully ===');
+            Log::info('=== Dashboard: Job dispatched successfully ===', ['job_id' => $jobId]);
 
             return response()->json([
                 'success' => true,
-                'message' => $message
+                'message' => $message,
+                'job_id' => $jobId
             ]);
         } catch (\Exception $e) {
             Log::error('=== Dashboard: Error dispatching job ===');
@@ -71,6 +98,47 @@ class DashboardController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to start lead generation process: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function stop(Request $request)
+    {
+        try {
+            $jobId = $request->input('job_id');
+            
+            if (!$jobId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Job ID is required'
+                ], 400);
+            }
+            
+            Log::info('=== Dashboard: Stop job requested ===', ['job_id' => $jobId]);
+            
+            $jobTrackingService = app(JobTrackingService::class);
+            $cancelled = $jobTrackingService->cancelJob($jobId);
+            
+            if ($cancelled) {
+                Log::info('=== Dashboard: Job cancelled successfully ===', ['job_id' => $jobId]);
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Job cancelled successfully'
+                ]);
+            } else {
+                Log::warning('=== Dashboard: Job not found or already completed ===', ['job_id' => $jobId]);
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Job not found or already completed'
+                ], 404);
+            }
+        } catch (\Exception $e) {
+            Log::error('=== Dashboard: Error cancelling job ===');
+            Log::error('Error message: ' . $e->getMessage());
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to cancel job: ' . $e->getMessage()
             ], 500);
         }
     }

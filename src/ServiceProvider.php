@@ -17,6 +17,7 @@ use Rococo\ChLeadGen\Services\ApolloService;
 use Rococo\ChLeadGen\Services\InstantlyService;
 use Rococo\ChLeadGen\Services\RuleConfigService;
 use Rococo\ChLeadGen\Services\WebhookService;
+use Rococo\ChLeadGen\Services\JobTrackingService;
 
 class ServiceProvider extends AddonServiceProvider
 {
@@ -184,6 +185,10 @@ class ServiceProvider extends AddonServiceProvider
 
         $this->app->singleton(RuleConfigService::class, function ($app) {
             return new RuleConfigService();
+        });
+
+        $this->app->singleton(JobTrackingService::class, function ($app) {
+            return new JobTrackingService();
         });
     }
 }

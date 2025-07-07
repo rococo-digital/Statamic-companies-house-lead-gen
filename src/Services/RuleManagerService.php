@@ -125,7 +125,7 @@ class RuleManagerService
     /**
      * Execute a specific rule
      */
-    public function executeRule(string $ruleKey, bool $forceRun = false): array
+    public function executeRule(string $ruleKey, bool $forceRun = false, ?JobTrackingService $jobTracking = null, ?string $jobId = null): array
     {
         $rule = $this->getRule($ruleKey);
         
@@ -167,9 +167,23 @@ class RuleManagerService
             $processedCount = 0;
 
             foreach ($companies as $company) {
+                // Check for job cancellation
+                if ($jobTracking && $jobId && $jobTracking->isJobCancelled($jobId)) {
+                    Log::info("Job cancelled during company processing for rule '{$ruleKey}'");
+                    throw new \Exception('Job cancelled by user');
+                }
+
                 $companyName = $company['company_name'] ?? $company['title'] ?? 'Unknown';
                 
                 Log::info("Processing company for rule '{$ruleKey}': {$companyName}");
+
+                // Update job progress
+                if ($jobTracking && $jobId) {
+                    $jobTracking->updateProgress($jobId, [
+                        'companies_processed' => $processedCount,
+                        'current_company' => $companyName
+                    ]);
+                }
 
                 try {
                     // Check if we should pause due to too many rate limit errors
@@ -286,7 +300,7 @@ class RuleManagerService
     /**
      * Execute all rules that are due to run
      */
-    public function executeScheduledRules(): array
+    public function executeScheduledRules(?JobTrackingService $jobTracking = null, ?string $jobId = null): array
     {
         $dueRules = $this->getRulesDueToRun();
         $results = [];
@@ -294,8 +308,14 @@ class RuleManagerService
         Log::info("Found " . count($dueRules) . " rules due to run", ['rules' => array_keys($dueRules)]);
 
         foreach ($dueRules as $ruleKey => $rule) {
+            // Check for job cancellation before each rule
+            if ($jobTracking && $jobId && $jobTracking->isJobCancelled($jobId)) {
+                Log::info("Job cancelled before executing rule '{$ruleKey}'");
+                throw new \Exception('Job cancelled by user');
+            }
+
             try {
-                $results[$ruleKey] = $this->executeRule($ruleKey);
+                $results[$ruleKey] = $this->executeRule($ruleKey, false, $jobTracking, $jobId);
             } catch (\Exception $e) {
                 Log::error("Failed to execute rule {$ruleKey}: " . $e->getMessage());
                 $results[$ruleKey] = [

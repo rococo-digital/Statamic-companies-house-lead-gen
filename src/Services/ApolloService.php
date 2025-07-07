@@ -36,14 +36,15 @@ class ApolloService
 
     /**
      * Get current rate limits from Apollo API or cache
+     * Specifically targets the mixed_people/search endpoint for accurate rate limiting
      */
-    private function getCurrentRateLimits($endpoint = 'people_search')
+    private function getCurrentRateLimits($endpoint = 'mixed_people_search')
     {
         $cacheKey = 'apollo_rate_limits_' . $endpoint;
         $cachedLimits = Cache::get($cacheKey);
         
-        // Return cached limits if they're recent (less than 5 minutes old)
-        if ($cachedLimits && isset($cachedLimits['timestamp']) && (time() - $cachedLimits['timestamp']) < 300) {
+        // Return cached limits if they're recent (less than 10 minutes old to reduce API calls)
+        if ($cachedLimits && isset($cachedLimits['timestamp']) && (time() - $cachedLimits['timestamp']) < 600) {
             return $cachedLimits['limits'];
         }
         
@@ -52,6 +53,7 @@ class ApolloService
             $masterApiKey = $this->config['apollo_master_api_key'] ?? $this->config['apollo_api_key'];
             
             $response = $this->client->post(self::APOLLO_API_USAGE_STATS_URL, [
+                'json' => [],
                 'headers' => [
                     'Accept' => 'application/json',
                     'Content-Type' => 'application/json',
@@ -85,11 +87,26 @@ class ApolloService
             if (is_array($data) && !empty($data)) {
                 $peopleSearchEndpoint = null;
                 
-                // Look for the people search endpoint in the data
+                // Look for the mixed_people search endpoint in the data (the one the app actually uses)
+                // The endpoint key is in format: ["api/v1/mixed_people", "search"]
                 foreach ($data as $endpointKey => $usage) {
-                    if (strpos($endpointKey, 'people') !== false || strpos($endpointKey, 'search') !== false) {
+                    // Check if this is the mixed_people search endpoint
+                    if ($endpointKey === '["api/v1/mixed_people", "search"]') {
                         $peopleSearchEndpoint = $usage;
+                        Log::debug("Found mixed_people/search endpoint for rate limiting: " . $endpointKey);
                         break;
+                    }
+                }
+                
+                // If mixed_people/search not found, fall back to other people search endpoints
+                if (!$peopleSearchEndpoint) {
+                    foreach ($data as $endpointKey => $usage) {
+                        // Look for any endpoint containing "people" and "search"
+                        if (strpos($endpointKey, 'people') !== false && strpos($endpointKey, 'search') !== false) {
+                            $peopleSearchEndpoint = $usage;
+                            Log::debug("Found fallback people search endpoint for rate limiting: " . $endpointKey);
+                            break;
+                        }
                     }
                 }
                 
@@ -124,15 +141,42 @@ class ApolloService
                 }
             }
             
-            // Cache the limits for 5 minutes
+            // Cache the limits for 10 minutes to reduce API calls
             Cache::put($cacheKey, [
                 'limits' => $limits,
                 'timestamp' => time()
-            ], 300);
+            ], 600);
             
             Log::debug("Updated Apollo rate limits for {$endpoint}: " . json_encode($limits));
             return $limits;
             
+        } catch (\GuzzleHttp\Exception\ClientException $e) {
+            $statusCode = $e->getResponse()->getStatusCode();
+            
+            if ($statusCode === 429) {
+                Log::warning("Rate limited when fetching Apollo rate limits. Using cached data if available.");
+                // Clear cache to force fresh data on next attempt
+                Cache::forget($cacheKey);
+                
+                // Return cached data if available, otherwise fallback
+                $cachedLimits = Cache::get($cacheKey);
+                if ($cachedLimits && isset($cachedLimits['limits'])) {
+                    return $cachedLimits['limits'];
+                }
+            }
+            
+            Log::warning("Failed to fetch Apollo rate limits, using fallback limits: " . $e->getMessage());
+            $fallbackLimits = $this->config['apollo']['fallback_limits'] ?? [
+                'per_minute' => 50, // Conservative limit for people search
+                'per_hour' => 200,
+                'per_day' => 600
+            ];
+            
+            return [
+                'per_minute' => ['limit' => $fallbackLimits['per_minute'], 'remaining' => $fallbackLimits['per_minute'], 'used' => 0],
+                'per_hour' => ['limit' => $fallbackLimits['per_hour'], 'remaining' => $fallbackLimits['per_hour'], 'used' => 0],
+                'per_day' => ['limit' => $fallbackLimits['per_day'], 'remaining' => $fallbackLimits['per_day'], 'used' => 0]
+            ];
         } catch (\Exception $e) {
             Log::warning("Failed to fetch Apollo rate limits, using fallback limits: " . $e->getMessage());
             $fallbackLimits = $this->config['apollo']['fallback_limits'] ?? [
@@ -152,7 +196,7 @@ class ApolloService
     /**
      * Conservative rate limiting based on current Apollo API limits
      */
-    private function rateLimit($endpoint = 'people_search')
+    private function rateLimit($endpoint = 'mixed_people_search')
     {
         $rateLimits = $this->getCurrentRateLimits($endpoint);
         
@@ -226,7 +270,7 @@ class ApolloService
         Cache::put($cacheKey, $newUsage, 120); // Store for 2 minutes
         
         // Get current rate limits for comparison
-        $rateLimits = $this->getCurrentRateLimits('people_search');
+        $rateLimits = $this->getCurrentRateLimits('mixed_people_search');
         $minuteLimit = $rateLimits['per_minute']['limit'];
         
         if ($newUsage > $minuteLimit) {
@@ -249,6 +293,19 @@ class ApolloService
                 return $requestCallback();
             } catch (\GuzzleHttp\Exception\ClientException $e) {
                 $statusCode = $e->getResponse()->getStatusCode();
+                $responseBody = $e->getResponse()->getBody()->getContents();
+                
+                // Log the actual error response for debugging
+                Log::error("Apollo API error response (HTTP {$statusCode}): " . $responseBody);
+                
+                // Handle specific Apollo API errors
+                if ($statusCode === 422) {
+                    $responseData = json_decode($responseBody, true);
+                    if (isset($responseData['error']) && strpos($responseData['error'], 'insufficient credits') !== false) {
+                        Log::error("Apollo API insufficient credits error: " . $responseData['error']);
+                        throw new \Exception("Apollo API insufficient credits. Please upgrade your plan or add more credits.");
+                    }
+                }
                 
                 if ($statusCode === 429 && $attempt < $maxRetries) {
                     // Clear rate limit cache to get fresh information
@@ -287,22 +344,64 @@ class ApolloService
         
         return $this->makeApiRequestWithRetry(function() use ($companyName) {
             // Apply conservative rate limiting before making request
-            $this->rateLimit('people_search');
-            $this->trackApiUsage('people_search');
+            $this->rateLimit('mixed_people_search');
+            $this->trackApiUsage('mixed_people_search');
+            
+            // Validate API key
+            if (empty($this->config['apollo_api_key'])) {
+                Log::error("Apollo API key is not configured");
+                throw new \Exception("Apollo API key is not configured. Please check your configuration.");
+            }
+            
+
+            
+            // Clean and validate the company name
+            $cleanCompanyName = trim($companyName);
+            if (empty($cleanCompanyName)) {
+                Log::warning("Empty company name provided for Apollo search");
+                return [];
+            }
+            
+            // Sanitize company name - remove special characters that might cause issues
+            $cleanCompanyName = preg_replace('/[^\w\s\-\.&]/', '', $cleanCompanyName);
+            $cleanCompanyName = trim($cleanCompanyName);
+            
+            // Limit length to prevent API issues
+            if (strlen($cleanCompanyName) > 100) {
+                $cleanCompanyName = substr($cleanCompanyName, 0, 100);
+            }
+            
+            if (empty($cleanCompanyName)) {
+                Log::warning("Company name became empty after sanitization: {$companyName}");
+                return [];
+            }
+            
+            $requestPayload = [
+                'q_organization_name' => $cleanCompanyName,
+                'per_page' => 25,
+                'page' => 1
+            ];
+            
+            Log::debug("Apollo People Search request payload: " . json_encode($requestPayload));
+            
+            Log::debug("Making Apollo API request to: " . self::APOLLO_API_PEOPLE_SEARCH_URL);
+            Log::debug("Using API key: " . substr($this->config['apollo_api_key'], 0, 10) . "...");
             
             $response = $this->client->post(self::APOLLO_API_PEOPLE_SEARCH_URL, [
-                'json' => [
-                    'q_organization_name' => $companyName,
-                    'per_page' => 25
-                ],
+                'json' => $requestPayload,
                 'headers' => [
                     'Accept' => 'application/json',
                     'Content-Type' => 'application/json',
-                    'X-Api-Key' => $this->config['apollo_api_key']
+                    'X-Api-Key' => $this->config['apollo_api_key'],
+                    'User-Agent' => 'Apollo-API-Client/1.0'
                 ]
             ]);
 
-            $data = json_decode($response->getBody()->getContents(), true);
+            $responseBody = $response->getBody()->getContents();
+            Log::debug("Apollo API response status: " . $response->getStatusCode());
+            Log::debug("Apollo API response body: " . $responseBody);
+            
+            $data = json_decode($responseBody, true);
             
             if (!isset($data['people']) || empty($data['people'])) {
                 Log::info("No people found in Apollo database for {$companyName}");
@@ -414,7 +513,88 @@ class ApolloService
      */
     public function getRateLimits()
     {
-        return $this->getCurrentRateLimits('people_search');
+        return $this->getCurrentRateLimits('mixed_people_search');
+    }
+
+    /**
+     * Get raw API limits without safety margin (for comparison)
+     * 
+     * @return array
+     */
+    public function getRawApiLimits()
+    {
+        try {
+            $masterApiKey = $this->config['apollo_master_api_key'] ?? $this->config['apollo_api_key'];
+            
+            $response = $this->client->post(self::APOLLO_API_USAGE_STATS_URL, [
+                'json' => [],
+                'headers' => [
+                    'Accept' => 'application/json',
+                    'Content-Type' => 'application/json',
+                    'X-Api-Key' => $masterApiKey
+                ]
+            ]);
+            
+            $data = json_decode($response->getBody()->getContents(), true);
+            $headers = $response->getHeaders();
+            
+            // Extract rate limit info from headers
+            $rateLimits = [
+                'per_minute' => [
+                    'limit' => (int)($headers['x-rate-limit-minute'][0] ?? 0),
+                    'used' => (int)($headers['x-minute-usage'][0] ?? 0),
+                    'remaining' => (int)($headers['x-minute-requests-left'][0] ?? 0)
+                ],
+                'per_hour' => [
+                    'limit' => (int)($headers['x-rate-limit-hourly'][0] ?? 0),
+                    'used' => (int)($headers['x-hourly-usage'][0] ?? 0),
+                    'remaining' => (int)($headers['x-hourly-requests-left'][0] ?? 0)
+                ],
+                'per_day' => [
+                    'limit' => (int)($headers['x-rate-limit-24-hour'][0] ?? 0),
+                    'used' => (int)($headers['x-24-hour-usage'][0] ?? 0),
+                    'remaining' => (int)($headers['x-24-hour-requests-left'][0] ?? 0)
+                ]
+            ];
+            
+            return $rateLimits;
+            
+        } catch (\Exception $e) {
+            Log::warning("Failed to fetch raw Apollo API limits: " . $e->getMessage());
+            return [
+                'per_minute' => ['limit' => 0, 'used' => 0, 'remaining' => 0],
+                'per_hour' => ['limit' => 0, 'used' => 0, 'remaining' => 0],
+                'per_day' => ['limit' => 0, 'used' => 0, 'remaining' => 0]
+            ];
+        }
+    }
+
+    /**
+     * Get estimated API calls needed for a typical rule execution
+     * 
+     * @return array
+     */
+    public function getEstimatedApiCallsForRule()
+    {
+        return [
+            'per_company' => [
+                'people_search' => 1,      // 1 API call to search for people at a company
+                'enrichment' => 1,         // 1 API call to enrich people details (bulk)
+                'total' => 2               // Total per company
+            ],
+            'per_rule_execution' => [
+                'min_companies' => 10,     // Minimum companies to process
+                'max_companies' => 50,     // Maximum companies to process
+                'min_calls' => 20,         // Minimum API calls (10 companies * 2 calls)
+                'max_calls' => 100,        // Maximum API calls (50 companies * 2 calls)
+                'typical_calls' => 50      // Typical API calls for a rule run
+            ],
+            'thresholds_explanation' => [
+                'minute' => 'Need at least 10 requests per minute for a rule run',
+                'hour' => 'Need at least 50 requests per hour for multiple rule runs',
+                'day' => 'Need at least 25 requests per day for a single rule run'
+            ]
+        ];
     }
 
     /**
@@ -424,7 +604,7 @@ class ApolloService
      */
     public function getCurrentDailyLimit()
     {
-        $rateLimits = $this->getCurrentRateLimits('people_search');
+        $rateLimits = $this->getCurrentRateLimits('mixed_people_search');
         return $rateLimits['per_day']['limit'];
     }
 
@@ -435,7 +615,7 @@ class ApolloService
      */
     public function getCurrentDailyUsage()
     {
-        $rateLimits = $this->getCurrentRateLimits('people_search');
+        $rateLimits = $this->getCurrentRateLimits('mixed_people_search');
         return $rateLimits['per_day']['used'];
     }
 
@@ -446,8 +626,68 @@ class ApolloService
      */
     public function getRemainingDailyRequests()
     {
-        $rateLimits = $this->getCurrentRateLimits('people_search');
+        $rateLimits = $this->getCurrentRateLimits('mixed_people_search');
         return $rateLimits['per_day']['remaining'];
+    }
+
+    /**
+     * Check if Apollo account has sufficient credits
+     * 
+     * @return array
+     */
+    public function checkApolloCredits()
+    {
+        try {
+            $masterApiKey = $this->config['apollo_master_api_key'] ?? $this->config['apollo_api_key'];
+            
+            $response = $this->client->post(self::APOLLO_API_USAGE_STATS_URL, [
+                'json' => [],
+                'headers' => [
+                    'Accept' => 'application/json',
+                    'Content-Type' => 'application/json',
+                    'X-Api-Key' => $masterApiKey
+                ]
+            ]);
+            
+            $data = json_decode($response->getBody()->getContents(), true);
+            
+            // If we get a successful response, we have credits
+            if (is_array($data) && !empty($data)) {
+                return [
+                    'has_credits' => true,
+                    'message' => 'Apollo account has sufficient credits'
+                ];
+            }
+            
+            return [
+                'has_credits' => false,
+                'message' => 'Unable to determine credit status'
+            ];
+            
+        } catch (\GuzzleHttp\Exception\ClientException $e) {
+            $statusCode = $e->getResponse()->getStatusCode();
+            $responseBody = $e->getResponse()->getBody()->getContents();
+            
+            if ($statusCode === 422) {
+                $responseData = json_decode($responseBody, true);
+                if (isset($responseData['error']) && strpos($responseData['error'], 'insufficient credits') !== false) {
+                    return [
+                        'has_credits' => false,
+                        'message' => 'Apollo account has insufficient credits: ' . $responseData['error']
+                    ];
+                }
+            }
+            
+            return [
+                'has_credits' => false,
+                'message' => 'Error checking credits: ' . $e->getMessage()
+            ];
+        } catch (\Exception $e) {
+            return [
+                'has_credits' => false,
+                'message' => 'Error checking credits: ' . $e->getMessage()
+            ];
+        }
     }
 
     /**
@@ -457,18 +697,46 @@ class ApolloService
      */
     public function canMakeApiCall()
     {
-        $rateLimits = $this->getCurrentRateLimits('people_search');
+        // Get adjusted limits (which are cached and don't make additional API calls)
+        $adjustedLimits = $this->getCurrentRateLimits('mixed_people_search');
         
-        $minuteRemaining = $rateLimits['per_minute']['remaining'];
-        $hourRemaining = $rateLimits['per_hour']['remaining'];
-        $dayRemaining = $rateLimits['per_day']['remaining'];
+        // Use adjusted limits for decision making to avoid additional API calls
+        $minuteRemaining = $adjustedLimits['per_minute']['remaining'];
+        $hourRemaining = $adjustedLimits['per_hour']['remaining'];
+        $dayRemaining = $adjustedLimits['per_day']['remaining'];
+        
+        // Define minimum thresholds for each time period
+        $minuteThreshold = 5;  // Need at least 5 requests per minute for a rule run
+        $hourThreshold = 20;   // Need at least 20 requests per hour for multiple rule runs
+        $dayThreshold = 10;    // Need at least 10 requests per day for a single rule run
+        
+        // Check if we have sufficient requests remaining (using RAW limits)
+        $hasSufficientMinute = $minuteRemaining >= $minuteThreshold;
+        $hasSufficientHour = $hourRemaining >= $hourThreshold;
+        $hasSufficientDay = $dayRemaining >= $dayThreshold;
+        
+        $canProceed = $hasSufficientMinute && $hasSufficientHour && $hasSufficientDay;
+        
+        // Log the decision for debugging
+        if (!$canProceed) {
+            $reasons = [];
+            if (!$hasSufficientMinute) $reasons[] = "minute limit too low ({$minuteRemaining} < {$minuteThreshold})";
+            if (!$hasSufficientHour) $reasons[] = "hour limit too low ({$hourRemaining} < {$hourThreshold})";
+            if (!$hasSufficientDay) $reasons[] = "day limit too low ({$dayRemaining} < {$dayThreshold})";
+            
+            Log::warning("Cannot proceed with API calls: " . implode(', ', $reasons));
+        }
         
         return [
-            'can_proceed' => $minuteRemaining > 0 && $hourRemaining > 0 && $dayRemaining > 0,
+            'can_proceed' => $canProceed,
             'minute_remaining' => $minuteRemaining,
             'hour_remaining' => $hourRemaining,
             'day_remaining' => $dayRemaining,
-            'limits' => $rateLimits
+            'minute_threshold' => $minuteThreshold,
+            'hour_threshold' => $hourThreshold,
+            'day_threshold' => $dayThreshold,
+            'adjusted_limits' => $adjustedLimits,
+            'raw_limits' => $adjustedLimits // Use adjusted limits instead of making another API call
         ];
     }
 
@@ -496,6 +764,7 @@ class ApolloService
             $this->rateLimit();
             
             $response = $this->client->post('https://api.apollo.io/api/v1/usage_stats/api_usage_stats', [
+                'json' => [],
                 'headers' => [
                     'Accept' => 'application/json',
                     'Content-Type' => 'application/json',
@@ -504,9 +773,6 @@ class ApolloService
             ]);
 
             $data = json_decode($response->getBody()->getContents(), true);
-            
-            // Log the full response for debugging
-            Log::info("Apollo API usage stats raw response: " . json_encode($data));
             
             // The response is the usage stats object directly
             if (is_array($data) && !empty($data)) {
@@ -657,6 +923,145 @@ class ApolloService
                 'error' => 'general_error',
                 'message' => 'Network or general error: ' . $e->getMessage()
             ];
+        }
+    }
+
+    /**
+     * Get specific people search endpoint usage
+     * 
+     * @return array|null
+     */
+    public function getPeopleSearchEndpointUsage()
+    {
+        try {
+            $masterApiKey = $this->config['apollo_master_api_key'] ?? $this->config['apollo_api_key'];
+            
+            $response = $this->client->post(self::APOLLO_API_USAGE_STATS_URL, [
+                'json' => [],
+                'headers' => [
+                    'Accept' => 'application/json',
+                    'Content-Type' => 'application/json',
+                    'X-Api-Key' => $masterApiKey
+                ]
+            ]);
+            
+            $data = json_decode($response->getBody()->getContents(), true);
+            
+            if (is_array($data) && !empty($data)) {
+                // Look for the specific people search endpoint that the application uses
+                $peopleSearchEndpoint = null;
+                $endpointName = null;
+                
+                // First, look specifically for the mixed_people/search endpoint (the one the app actually uses)
+                // The endpoint key is in format: ["api/v1/mixed_people", "search"]
+                foreach ($data as $endpointKey => $usage) {
+                    if ($endpointKey === '["api/v1/mixed_people", "search"]') {
+                        $peopleSearchEndpoint = $usage;
+                        $endpointName = $endpointKey;
+                        Log::info("Found mixed_people/search endpoint: {$endpointName}");
+                        break;
+                    }
+                }
+                
+                // If not found, try other people search endpoints (but not contacts)
+                if (!$peopleSearchEndpoint) {
+                    foreach ($data as $endpointKey => $usage) {
+                        // Look for people search endpoints (but not contacts)
+                        if ((strpos($endpointKey, 'people') !== false && strpos($endpointKey, 'search') !== false) && 
+                            strpos($endpointKey, 'contact') === false) {
+                            $peopleSearchEndpoint = $usage;
+                            $endpointName = $endpointKey;
+                            Log::info("Found alternative people search endpoint: {$endpointName}");
+                            break;
+                        }
+                    }
+                }
+                
+                if ($peopleSearchEndpoint) {
+                    return [
+                        'endpoint_name' => $endpointName,
+                        'usage' => $peopleSearchEndpoint,
+                        'day' => [
+                            'limit' => $peopleSearchEndpoint['day']['limit'] ?? 0,
+                            'consumed' => $peopleSearchEndpoint['day']['consumed'] ?? 0,
+                            'remaining' => $peopleSearchEndpoint['day']['left_over'] ?? 0,
+                            'percentage_used' => $peopleSearchEndpoint['day']['limit'] > 0 ? round(($peopleSearchEndpoint['day']['consumed'] / $peopleSearchEndpoint['day']['limit']) * 100, 1) : 0
+                        ],
+                        'hour' => [
+                            'limit' => $peopleSearchEndpoint['hour']['limit'] ?? 0,
+                            'consumed' => $peopleSearchEndpoint['hour']['consumed'] ?? 0,
+                            'remaining' => $peopleSearchEndpoint['hour']['left_over'] ?? 0,
+                            'percentage_used' => $peopleSearchEndpoint['hour']['limit'] > 0 ? round(($peopleSearchEndpoint['hour']['consumed'] / $peopleSearchEndpoint['hour']['limit']) * 100, 1) : 0
+                        ],
+                        'minute' => [
+                            'limit' => $peopleSearchEndpoint['minute']['limit'] ?? 0,
+                            'consumed' => $peopleSearchEndpoint['minute']['consumed'] ?? 0,
+                            'remaining' => $peopleSearchEndpoint['minute']['left_over'] ?? 0,
+                            'percentage_used' => $peopleSearchEndpoint['minute']['limit'] > 0 ? round(($peopleSearchEndpoint['minute']['consumed'] / $peopleSearchEndpoint['minute']['limit']) * 100, 1) : 0
+                        ]
+                    ];
+                } else {
+                    Log::warning("People search endpoint not found in Apollo API response. Available endpoints: " . implode(', ', array_keys($data)));
+                    return null;
+                }
+            }
+            
+            return null;
+            
+        } catch (\Exception $e) {
+            Log::error("Error fetching people search endpoint usage: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Clear all Apollo API caches
+     */
+    public function clearApolloCaches()
+    {
+        // Clear rate limit caches
+        Cache::forget('apollo_rate_limits_mixed_people_search');
+        Cache::forget('apollo_rate_limits_people_search');
+        Cache::forget('apollo_rate_limits');
+        
+        // Clear usage tracking caches
+        $currentHour = date('Y-m-d_H:i');
+        Cache::forget('apollo_api_usage_' . $currentHour);
+        
+        Log::info("Cleared all Apollo API caches");
+    }
+
+    /**
+     * Get raw Apollo API response for debugging
+     * 
+     * @return array|null
+     */
+    public function getRawApolloApiResponse()
+    {
+        try {
+            $masterApiKey = $this->config['apollo_master_api_key'] ?? $this->config['apollo_api_key'];
+            
+            $response = $this->client->post(self::APOLLO_API_USAGE_STATS_URL, [
+                'json' => [],
+                'headers' => [
+                    'Accept' => 'application/json',
+                    'Content-Type' => 'application/json',
+                    'X-Api-Key' => $masterApiKey
+                ]
+            ]);
+            
+            $data = json_decode($response->getBody()->getContents(), true);
+            $headers = $response->getHeaders();
+            
+            return [
+                'data' => $data,
+                'headers' => $headers,
+                'endpoints' => is_array($data) ? array_keys($data) : []
+            ];
+            
+        } catch (\Exception $e) {
+            Log::error("Error fetching raw Apollo API response: " . $e->getMessage());
+            return null;
         }
     }
 } 

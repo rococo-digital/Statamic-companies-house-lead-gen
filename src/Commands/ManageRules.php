@@ -371,39 +371,55 @@ class ManageRules extends Command
             // Get Apollo service instance
             $apolloService = app(\Rococo\ChLeadGen\Services\ApolloService::class);
             
-            // Get current rate limits
-            $rateLimits = $apolloService->getRateLimits();
+            // Get both adjusted and raw limits
+            $adjustedLimits = $apolloService->getRateLimits();
+            $rawLimits = $apolloService->getRawApiLimits();
+            $canMakeApiCall = $apolloService->canMakeApiCall();
             
-            $this->line('<comment>Current Limits:</comment>');
-            $this->line("  Per Minute: {$rateLimits['per_minute']['used']}/{$rateLimits['per_minute']['limit']} ({$rateLimits['per_minute']['remaining']} remaining)");
-            $this->line("  Per Hour: {$rateLimits['per_hour']['used']}/{$rateLimits['per_hour']['limit']} ({$rateLimits['per_hour']['remaining']} remaining)");
-            $this->line("  Per Day: {$rateLimits['per_day']['used']}/{$rateLimits['per_day']['limit']} ({$rateLimits['per_day']['remaining']} remaining)");
-            
-            // Calculate percentages
-            $minutePercent = $rateLimits['per_minute']['limit'] > 0 ? round(($rateLimits['per_minute']['used'] / $rateLimits['per_minute']['limit']) * 100, 1) : 0;
-            $hourPercent = $rateLimits['per_hour']['limit'] > 0 ? round(($rateLimits['per_hour']['used'] / $rateLimits['per_hour']['limit']) * 100, 1) : 0;
-            $dayPercent = $rateLimits['per_day']['limit'] > 0 ? round(($rateLimits['per_day']['used'] / $rateLimits['per_day']['limit']) * 100, 1) : 0;
+            $this->line('<comment>Actual API Usage (Raw Limits):</comment>');
+            $this->line("  Per Minute: {$rawLimits['per_minute']['used']}/{$rawLimits['per_minute']['limit']} ({$rawLimits['per_minute']['remaining']} remaining)");
+            $this->line("  Per Hour: {$rawLimits['per_hour']['used']}/{$rawLimits['per_hour']['limit']} ({$rawLimits['per_hour']['remaining']} remaining)");
+            $this->line("  Per Day: {$rawLimits['per_day']['used']}/{$rawLimits['per_day']['limit']} ({$rawLimits['per_day']['remaining']} remaining)");
             
             $this->line('');
-            $this->line('<comment>Usage Percentages:</comment>');
+            $this->line('<comment>Adjusted Limits (with safety margin):</comment>');
+            $this->line("  Per Minute: {$adjustedLimits['per_minute']['used']}/{$adjustedLimits['per_minute']['limit']} ({$adjustedLimits['per_minute']['remaining']} remaining)");
+            $this->line("  Per Hour: {$adjustedLimits['per_hour']['used']}/{$adjustedLimits['per_hour']['limit']} ({$adjustedLimits['per_hour']['remaining']} remaining)");
+            $this->line("  Per Day: {$adjustedLimits['per_day']['used']}/{$adjustedLimits['per_day']['limit']} ({$adjustedLimits['per_day']['remaining']} remaining)");
+            
+            // Calculate percentages based on raw limits
+            $minutePercent = $rawLimits['per_minute']['limit'] > 0 ? round(($rawLimits['per_minute']['used'] / $rawLimits['per_minute']['limit']) * 100, 1) : 0;
+            $hourPercent = $rawLimits['per_hour']['limit'] > 0 ? round(($rawLimits['per_hour']['used'] / $rawLimits['per_hour']['limit']) * 100, 1) : 0;
+            $dayPercent = $rawLimits['per_day']['limit'] > 0 ? round(($rawLimits['per_day']['used'] / $rawLimits['per_day']['limit']) * 100, 1) : 0;
+            
+            $this->line('');
+            $this->line('<comment>Usage Percentages (Raw Limits):</comment>');
             $this->line("  Per Minute: {$minutePercent}%");
             $this->line("  Per Hour: {$hourPercent}%");
             $this->line("  Per Day: {$dayPercent}%");
             
-            // Check for warnings
+            // Show API call status
             $this->line('');
-            if ($minutePercent > 80) {
-                $this->warn('⚠️  Minute limit is high - consider pausing processing');
-            }
-            if ($hourPercent > 80) {
-                $this->warn('⚠️  Hour limit is high - consider pausing processing');
-            }
-            if ($dayPercent > 80) {
-                $this->warn('⚠️  Day limit is high - consider pausing processing');
+            if ($canMakeApiCall['can_proceed']) {
+                $this->info('✅ Ready to make API calls');
+            } else {
+                $this->error('❌ Cannot make API calls - insufficient quota');
             }
             
-            if ($minutePercent <= 80 && $hourPercent <= 80 && $dayPercent <= 80) {
-                $this->info('✅ All rate limits are healthy');
+            // Check for warnings
+            $this->line('');
+            if ($minutePercent > 90) {
+                $this->warn('⚠️  Minute usage is very high - consider pausing processing');
+            }
+            if ($hourPercent > 90) {
+                $this->warn('⚠️  Hour usage is very high - consider pausing processing');
+            }
+            if ($dayPercent > 90) {
+                $this->warn('⚠️  Day usage is very high - consider pausing processing');
+            }
+            
+            if ($minutePercent <= 90 && $hourPercent <= 90 && $dayPercent <= 90) {
+                $this->info('✅ All usage levels are healthy');
             }
             
             // Check for recent rate limit errors

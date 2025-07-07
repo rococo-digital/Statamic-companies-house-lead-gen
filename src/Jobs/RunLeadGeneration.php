@@ -9,6 +9,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Rococo\ChLeadGen\Services\RuleManagerService;
 use Rococo\ChLeadGen\Services\StatsService;
+use Rococo\ChLeadGen\Services\JobTrackingService;
 use Illuminate\Support\Facades\Log;
 
 class RunLeadGeneration implements ShouldQueue
@@ -17,41 +18,73 @@ class RunLeadGeneration implements ShouldQueue
 
     protected $ruleKey;
     protected $forceRun;
+    protected $jobId;
 
     /**
      * Create a new job instance.
      *
      * @param string|null $ruleKey Specific rule to run, or null for all scheduled rules
      * @param bool $forceRun Force run even if rule is disabled or not scheduled
+     * @param string|null $jobId Optional job ID for tracking
      */
-    public function __construct(?string $ruleKey = null, bool $forceRun = false)
+    public function __construct(?string $ruleKey = null, bool $forceRun = false, ?string $jobId = null)
     {
         $this->ruleKey = $ruleKey;
         $this->forceRun = $forceRun;
+        $this->jobId = $jobId;
     }
 
-    public function handle(RuleManagerService $ruleManager, StatsService $statsService)
+    public function handle(RuleManagerService $ruleManager, StatsService $statsService, JobTrackingService $jobTracking)
     {
+        // Generate job ID if not provided
+        if (!$this->jobId) {
+            $this->jobId = $jobTracking->generateJobId();
+        }
+
         try {
-            Log::info('=== Starting lead generation job ===', [
+            // Start tracking the job
+            $jobTracking->startJob($this->jobId, [
                 'rule_key' => $this->ruleKey,
                 'force_run' => $this->forceRun
             ]);
 
-            if ($this->ruleKey) {
-                // Run specific rule
-                $result = $this->runSpecificRule($ruleManager);
-            } else {
-                // Run all scheduled rules (default behavior for backward compatibility)
-                $result = $this->runScheduledRules($ruleManager);
+            Log::info('=== Starting lead generation job ===', [
+                'job_id' => $this->jobId,
+                'rule_key' => $this->ruleKey,
+                'force_run' => $this->forceRun
+            ]);
+
+            // Check for cancellation before starting
+            if ($jobTracking->isJobCancelled($this->jobId)) {
+                Log::info('=== Job cancelled before execution ===', ['job_id' => $this->jobId]);
+                $jobTracking->completeJob($this->jobId, ['status' => 'cancelled']);
+                return;
             }
 
-            Log::info('=== Lead generation job completed ===', ['result' => $result]);
+            if ($this->ruleKey) {
+                // Run specific rule
+                $result = $this->runSpecificRule($ruleManager, $jobTracking);
+            } else {
+                // Run all scheduled rules (default behavior for backward compatibility)
+                $result = $this->runScheduledRules($ruleManager, $jobTracking);
+            }
+
+            // Check for cancellation before completing
+            if ($jobTracking->isJobCancelled($this->jobId)) {
+                Log::info('=== Job cancelled during execution ===', ['job_id' => $this->jobId]);
+                $jobTracking->completeJob($this->jobId, ['status' => 'cancelled']);
+                return;
+            }
+
+            Log::info('=== Lead generation job completed ===', ['job_id' => $this->jobId, 'result' => $result]);
+            $jobTracking->completeJob($this->jobId, $result);
 
         } catch (\Exception $e) {
-            Log::error('=== Error in lead generation job ===');
+            Log::error('=== Error in lead generation job ===', ['job_id' => $this->jobId]);
             Log::error('Error message: ' . $e->getMessage());
             Log::error('Stack trace: ' . $e->getTraceAsString());
+            
+            $jobTracking->failJob($this->jobId, $e->getMessage());
             throw $e;
         }
     }
@@ -59,12 +92,12 @@ class RunLeadGeneration implements ShouldQueue
     /**
      * Run a specific rule
      */
-    protected function runSpecificRule(RuleManagerService $ruleManager): array
+    protected function runSpecificRule(RuleManagerService $ruleManager, JobTrackingService $jobTracking): array
     {
         Log::info("Executing specific rule: {$this->ruleKey}");
 
         try {
-            $result = $ruleManager->executeRule($this->ruleKey, $this->forceRun);
+            $result = $ruleManager->executeRule($this->ruleKey, $this->forceRun, $jobTracking, $this->jobId);
             
             Log::info("Rule execution completed", [
                 'rule_key' => $this->ruleKey,
@@ -86,7 +119,7 @@ class RunLeadGeneration implements ShouldQueue
     /**
      * Run all scheduled rules (backward compatibility)
      */
-    protected function runScheduledRules(RuleManagerService $ruleManager): array
+    protected function runScheduledRules(RuleManagerService $ruleManager, JobTrackingService $jobTracking): array
     {
         Log::info("Executing all scheduled rules");
 
@@ -106,7 +139,7 @@ class RunLeadGeneration implements ShouldQueue
 
         Log::info("Found " . count($dueRules) . " rules due to run", ['rules' => array_keys($dueRules)]);
 
-        $results = $ruleManager->executeScheduledRules();
+        $results = $ruleManager->executeScheduledRules($jobTracking, $this->jobId);
         
         $successCount = 0;
         $failureCount = 0;
@@ -225,16 +258,16 @@ class RunLeadGeneration implements ShouldQueue
     /**
      * Static method to dispatch job for a specific rule
      */
-    public static function dispatchRule(string $ruleKey, bool $forceRun = false): void
+    public static function dispatchRule(string $ruleKey, bool $forceRun = false, ?string $jobId = null): void
     {
-        static::dispatch($ruleKey, $forceRun);
+        static::dispatch($ruleKey, $forceRun, $jobId);
     }
 
     /**
      * Static method to dispatch job for all scheduled rules (default behavior)
      */
-    public static function dispatchScheduled(): void
+    public static function dispatchScheduled(?string $jobId = null): void
     {
-        static::dispatch();
+        static::dispatch(null, false, $jobId);
     }
 } 

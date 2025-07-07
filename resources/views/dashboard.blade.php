@@ -7,10 +7,17 @@
         <h1>CH Lead Gen Dashboard</h1>
         <div class="flex items-center space-x-2">
             <a href="{{ cp_route('ch-lead-gen.settings') }}" class="btn-primary">Settings</a>
-            @if(!empty($rules))
-                <button type="button" class="btn-primary" onclick="runAllScheduledRules()">Run All Scheduled</button>
+            @if($currentJob && $currentJob['status'] === 'running')
+                <button type="button" class="btn btn-sm border-red-300 text-red-700 hover:bg-red-50" 
+                        onclick="stopCurrentJob('{{ $currentJob['job_id'] }}')">
+                    ⏹️ Stop Current Job
+                </button>
             @else
-                <button type="button" class="btn-primary" onclick="runLeadGeneration()">Run Now (Legacy)</button>
+                @if(!empty($rules))
+                    <button type="button" class="btn-primary" onclick="runAllScheduledRules()">Run All Scheduled</button>
+                @else
+                    <button type="button" class="btn-primary" onclick="runLeadGeneration()">Run Now (Legacy)</button>
+                @endif
             @endif
         </div>
     </div>
@@ -127,8 +134,105 @@
             </div>
         </div>
 
-        <!-- API Usage Overview -->
-        @if(!empty($internalApiUsage))
+        <!-- API Quota Warning -->
+        @if(isset($canMakeApiCall) && isset($apolloApiUsage))
+            @php
+                // Get the specific people search endpoint usage
+                $peopleSearchUsage = null;
+                if (!empty($apolloApiUsage['quota_info'])) {
+                    foreach ($apolloApiUsage['quota_info'] as $endpoint => $quota) {
+                        if (strpos(strtolower($endpoint), 'mixed_people') !== false && strpos(strtolower($endpoint), 'search') !== false) {
+                            $peopleSearchUsage = $quota;
+                            break;
+                        }
+                    }
+                }
+                
+                // Use people search endpoint data if available, otherwise fall back to overall data
+                if ($peopleSearchUsage) {
+                    $dayRemaining = $peopleSearchUsage['day']['remaining'] ?? 0;
+                    $dayLimit = $peopleSearchUsage['day']['limit'] ?? 0;
+                    $dayUsed = $peopleSearchUsage['day']['consumed'] ?? 0;
+                    $dayUsagePercent = $peopleSearchUsage['day']['percentage_used'] ?? 0;
+                } else {
+                    $dayRemaining = $canMakeApiCall['day_remaining'] ?? 0;
+                    $dayLimit = $canMakeApiCall['day_limit'] ?? 0;
+                    $dayUsed = $canMakeApiCall['day_used'] ?? 0;
+                    $dayUsagePercent = $dayLimit > 0 ? round(($dayUsed / $dayLimit) * 100, 1) : 0;
+                }
+                
+                $dayThreshold = $canMakeApiCall['day_threshold'] ?? 25;
+                $showApiWarning = $dayRemaining < $dayThreshold || $dayUsagePercent >= 90;
+            @endphp
+            
+            @if($showApiWarning)
+                <div class="card p-6 mb-6 bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-yellow-300">
+                    <div class="flex items-start space-x-4">
+                        <div class="flex-shrink-0">
+                            <svg class="h-8 w-8 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                            </svg>
+                        </div>
+                        <div class="flex-1">
+                            <div class="flex items-center justify-between mb-3">
+                                <h2 class="text-xl font-bold text-yellow-800">Apollo API Quota Warning</h2>
+                                <a href="{{ cp_route('ch-lead-gen.apollo-stats') }}" class="btn-primary btn-sm">📊 View Details</a>
+                            </div>
+                            <div class="text-sm text-yellow-700 space-y-2">
+                                @if($dayRemaining < $dayThreshold)
+                                    <div class="flex items-center space-x-2">
+                                        <span class="w-2 h-2 bg-red-500 rounded-full"></span>
+                                        <span><strong>Daily quota is running low:</strong> {{ number_format($dayRemaining) }} requests remaining (minimum threshold: {{ number_format($dayThreshold) }})</span>
+                                    </div>
+                                @endif
+                                @if($dayUsagePercent >= 90)
+                                    <div class="flex items-center space-x-2">
+                                        <span class="w-2 h-2 bg-red-500 rounded-full"></span>
+                                        <span><strong>Daily usage is very high:</strong> {{ $dayUsagePercent }}% used ({{ number_format($dayUsed) }}/{{ number_format($dayLimit) }} requests)</span>
+                                    </div>
+                                @endif
+                            </div>
+                            <div class="mt-4 p-3 bg-yellow-100 border border-yellow-200 rounded-lg">
+                                <div class="text-sm text-yellow-800">
+                                    <strong>Recommendation:</strong> Consider pausing rule execution until quota resets or upgrading your Apollo plan to avoid rate limiting.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            @else
+                <!-- API Usage Summary (when quota is healthy) -->
+                <div class="card p-4 mb-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2>API Usage (Last 7 Days)</h2>
+                        <a href="{{ cp_route('ch-lead-gen.apollo-stats') }}" class="btn-primary btn-sm">📊 Apollo API Stats</a>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        @php
+                            $totalCH = array_sum(array_column($internalApiUsage, 'companies_house'));
+                            $totalApollo = array_sum(array_column($internalApiUsage, 'apollo'));
+                            $totalInstantly = array_sum(array_column($internalApiUsage, 'instantly'));
+                        @endphp
+                        <div class="text-center p-4 bg-blue-50 rounded-lg">
+                            <div class="text-2xl font-bold text-blue-600">{{ number_format($totalCH) }}</div>
+                            <div class="text-blue-800">Companies House</div>
+                        </div>
+                        <div class="text-center p-4 bg-green-50 rounded-lg">
+                            <div class="text-2xl font-bold text-green-600">{{ number_format($totalApollo) }}</div>
+                            <div class="text-green-800">Apollo</div>
+                        </div>
+                        <div class="text-center p-4 bg-purple-50 rounded-lg">
+                            <div class="text-2xl font-bold text-purple-600">{{ number_format($totalInstantly) }}</div>
+                            <div class="text-purple-800">Instantly</div>
+                        </div>
+                    </div>
+                    <div class="mt-4 text-sm text-gray-600">
+                        <p>💡 Apollo API quota is healthy. For detailed rate limits and real-time usage statistics, click the "Apollo API Stats" button above.</p>
+                    </div>
+                </div>
+            @endif
+        @elseif(!empty($internalApiUsage))
+            <!-- Fallback API Usage Overview (when Apollo data unavailable) -->
             <div class="card p-4 mb-6">
                 <div class="flex items-center justify-between mb-4">
                     <h2>API Usage (Last 7 Days)</h2>
@@ -200,6 +304,45 @@
         </div>
     @endif
 
+    <!-- Current Job Status -->
+    @if($currentJob && $currentJob['status'] === 'running')
+        <div class="card p-4 mb-6 bg-blue-50 border-2 border-blue-200">
+            <div class="flex items-center justify-between mb-3">
+                <h2 class="text-lg font-semibold text-blue-800">🔄 Current Job Running</h2>
+                <button type="button" class="btn btn-sm border-red-300 text-red-700 hover:bg-red-50" 
+                        onclick="stopCurrentJob('{{ $currentJob['job_id'] }}')">
+                    ⏹️ Stop Job
+                </button>
+            </div>
+            <div class="text-sm text-blue-700 space-y-2">
+                <div class="flex items-center space-x-2">
+                    <span class="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>
+                    <span><strong>Job ID:</strong> {{ $currentJob['job_id'] }}</span>
+                </div>
+                @if($currentJob['rule_key'])
+                    <div class="flex items-center space-x-2">
+                        <span class="w-2 h-2 bg-blue-500 rounded-full"></span>
+                        <span><strong>Rule:</strong> {{ $currentJob['rule_key'] }}</span>
+                    </div>
+                @endif
+                <div class="flex items-center space-x-2">
+                    <span class="w-2 h-2 bg-blue-500 rounded-full"></span>
+                    <span><strong>Started:</strong> {{ \Carbon\Carbon::parse($currentJob['started_at'])->diffForHumans() }}</span>
+                </div>
+                @if($currentJob['progress']['current_company'])
+                    <div class="flex items-center space-x-2">
+                        <span class="w-2 h-2 bg-blue-500 rounded-full"></span>
+                        <span><strong>Processing:</strong> {{ $currentJob['progress']['current_company'] }}</span>
+                    </div>
+                @endif
+                <div class="flex items-center space-x-2">
+                    <span class="w-2 h-2 bg-blue-500 rounded-full"></span>
+                    <span><strong>Progress:</strong> {{ $currentJob['progress']['companies_processed'] ?? 0 }} companies processed</span>
+                </div>
+            </div>
+        </div>
+    @endif
+
     <!-- Activity Log -->
     <div class="card p-4">
         <div class="flex items-center justify-between mb-4">
@@ -256,6 +399,40 @@
             executeRun(null, false, 'legacy lead generation');
         }
 
+        function stopCurrentJob(jobId) {
+            if (!confirm('Are you sure you want to stop the current job? This action cannot be undone.')) {
+                return;
+            }
+            
+            fetch('{{ cp_route('ch-lead-gen.stop') }}', {
+                method: 'POST',
+                headers: {
+                    'X-CSRF-TOKEN': '{{ csrf_token() }}',
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify({
+                    job_id: jobId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    Statamic.$toast.success(data.message);
+                    // Reload the page to update the UI
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1000);
+                } else {
+                    Statamic.$toast.error(data.message);
+                }
+            })
+            .catch(error => {
+                Statamic.$toast.error('An error occurred while stopping the job');
+                console.error('Error:', error);
+            });
+        }
+
         function executeRun(ruleKey, forceRun, description) {
             // Show processing status
             isProcessing = true;
@@ -293,6 +470,12 @@
             .then(data => {
                 if (data.success) {
                     Statamic.$toast.success(data.message);
+                    
+                    // Store job ID for potential stopping
+                    if (data.job_id) {
+                        window.currentJobId = data.job_id;
+                    }
+                    
                     // Continue monitoring for 2 minutes
                     setTimeout(() => {
                         stopLogRefresh();
@@ -369,6 +552,13 @@
         // Initial load of logs
         document.addEventListener('DOMContentLoaded', function() {
             refreshLogs();
+            
+            // If there's a current job running, refresh the page periodically to show progress
+            @if($currentJob && $currentJob['status'] === 'running')
+                setInterval(function() {
+                    window.location.reload();
+                }, 10000); // Refresh every 10 seconds
+            @endif
         });
     </script>
 @endsection 
