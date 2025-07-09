@@ -638,30 +638,33 @@ class ApolloService
     public function checkApolloCredits()
     {
         try {
-            $masterApiKey = $this->config['apollo_master_api_key'] ?? $this->config['apollo_api_key'];
-            
-            $response = $this->client->post(self::APOLLO_API_USAGE_STATS_URL, [
-                'json' => [],
+            // Instead of relying on the potentially unreliable rate limits endpoint,
+            // make a real API call to test if credits are actually available
+            $testResponse = $this->client->post(self::APOLLO_API_PEOPLE_SEARCH_URL, [
+                'json' => [
+                    'q_organization_name' => 'TEST_CREDIT_CHECK',
+                    'per_page' => 1,
+                    'page' => 1
+                ],
                 'headers' => [
                     'Accept' => 'application/json',
                     'Content-Type' => 'application/json',
-                    'X-Api-Key' => $masterApiKey
+                    'X-Api-Key' => $this->config['apollo_api_key']
                 ]
             ]);
             
-            $data = json_decode($response->getBody()->getContents(), true);
-            
             // If we get a successful response, we have credits
-            if (is_array($data) && !empty($data)) {
+            $statusCode = $testResponse->getStatusCode();
+            if ($statusCode === 200) {
                 return [
                     'has_credits' => true,
-                    'message' => 'Apollo account has sufficient credits'
+                    'message' => 'Apollo account has sufficient credits (verified with test API call)'
                 ];
             }
             
             return [
                 'has_credits' => false,
-                'message' => 'Unable to determine credit status'
+                'message' => 'Unexpected response from Apollo API: HTTP ' . $statusCode
             ];
             
         } catch (\GuzzleHttp\Exception\ClientException $e) {
@@ -697,6 +700,24 @@ class ApolloService
      */
     public function canMakeApiCall()
     {
+        // First check if we have credits at all
+        $creditCheck = $this->checkApolloCredits();
+        if (!$creditCheck['has_credits']) {
+            return [
+                'can_proceed' => false,
+                'minute_remaining' => 0,
+                'hour_remaining' => 0,
+                'day_remaining' => 0,
+                'minute_threshold' => 5,
+                'hour_threshold' => 20,
+                'day_threshold' => 10,
+                'adjusted_limits' => [],
+                'raw_limits' => [],
+                'reason' => 'insufficient_credits',
+                'message' => $creditCheck['message']
+            ];
+        }
+        
         // Get adjusted limits (which are cached and don't make additional API calls)
         $adjustedLimits = $this->getCurrentRateLimits('mixed_people_search');
         
@@ -736,7 +757,9 @@ class ApolloService
             'hour_threshold' => $hourThreshold,
             'day_threshold' => $dayThreshold,
             'adjusted_limits' => $adjustedLimits,
-            'raw_limits' => $adjustedLimits // Use adjusted limits instead of making another API call
+            'raw_limits' => $adjustedLimits, // Use adjusted limits instead of making another API call
+            'reason' => $canProceed ? 'ok' : 'rate_limits',
+            'message' => $canProceed ? 'Ready to make API calls' : 'Rate limits insufficient'
         ];
     }
 

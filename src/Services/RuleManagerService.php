@@ -143,6 +143,34 @@ class RuleManagerService
         $this->statsService->startRuleExecution($ruleKey);
 
         try {
+            // Pre-execution credit check for Apollo
+            Log::info("Performing pre-execution Apollo credit check for rule '{$ruleKey}'");
+            $creditCheck = $this->apolloService->checkApolloCredits();
+            $canMakeApiCall = $this->apolloService->canMakeApiCall();
+            
+            if (!$creditCheck['has_credits']) {
+                $errorMessage = "Apollo API insufficient credits detected before rule execution: " . $creditCheck['message'];
+                Log::error($errorMessage);
+                throw new \Exception($errorMessage);
+            }
+            
+            if (!$canMakeApiCall['can_proceed']) {
+                $errorMessage = "Apollo API rate limits insufficient for rule execution. " . 
+                               "Minute remaining: {$canMakeApiCall['minute_remaining']}, " .
+                               "Hour remaining: {$canMakeApiCall['hour_remaining']}, " .
+                               "Day remaining: {$canMakeApiCall['day_remaining']}";
+                Log::error($errorMessage);
+                throw new \Exception($errorMessage);
+            }
+            
+            Log::info("Apollo credit check passed for rule '{$ruleKey}'", [
+                'credits_available' => $creditCheck['has_credits'],
+                'can_make_api_calls' => $canMakeApiCall['can_proceed'],
+                'minute_remaining' => $canMakeApiCall['minute_remaining'],
+                'hour_remaining' => $canMakeApiCall['hour_remaining'],
+                'day_remaining' => $canMakeApiCall['day_remaining']
+            ]);
+
             // Step 1: Search for companies
             $companies = $this->searchCompaniesForRule($ruleKey, $rule);
             $companiesCount = count($companies);
@@ -306,6 +334,36 @@ class RuleManagerService
         $results = [];
 
         Log::info("Found " . count($dueRules) . " rules due to run", ['rules' => array_keys($dueRules)]);
+
+        // Global credit check before processing any rules
+        if (!empty($dueRules)) {
+            Log::info("Performing global Apollo credit check before scheduled rules execution");
+            $creditCheck = $this->apolloService->checkApolloCredits();
+            $canMakeApiCall = $this->apolloService->canMakeApiCall();
+            
+            if (!$creditCheck['has_credits']) {
+                $errorMessage = "Apollo API insufficient credits detected before scheduled rules execution: " . $creditCheck['message'];
+                Log::error($errorMessage);
+                throw new \Exception($errorMessage);
+            }
+            
+            if (!$canMakeApiCall['can_proceed']) {
+                $errorMessage = "Apollo API rate limits insufficient for scheduled rules execution. " . 
+                               "Minute remaining: {$canMakeApiCall['minute_remaining']}, " .
+                               "Hour remaining: {$canMakeApiCall['hour_remaining']}, " .
+                               "Day remaining: {$canMakeApiCall['day_remaining']}";
+                Log::error($errorMessage);
+                throw new \Exception($errorMessage);
+            }
+            
+            Log::info("Global Apollo credit check passed for scheduled rules", [
+                'credits_available' => $creditCheck['has_credits'],
+                'can_make_api_calls' => $canMakeApiCall['can_proceed'],
+                'minute_remaining' => $canMakeApiCall['minute_remaining'],
+                'hour_remaining' => $canMakeApiCall['hour_remaining'],
+                'day_remaining' => $canMakeApiCall['day_remaining']
+            ]);
+        }
 
         foreach ($dueRules as $ruleKey => $rule) {
             // Check for job cancellation before each rule

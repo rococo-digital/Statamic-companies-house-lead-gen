@@ -42,35 +42,67 @@ class WebhookService
             return false;
         }
 
-        try {
-            $payload = $this->buildPayload($ruleKey, $rule, $results);
-            $headers = $this->buildHeaders($payload, $webhookSecret);
+        // Add retry logic for webhook failures
+        $maxRetries = 3;
+        $baseDelay = 5; // Start with 5 seconds delay
+        
+        // Add a small delay before first attempt to help with rate limiting
+        // This is especially important after long-running rule executions
+        Log::info("Adding 3-second delay before webhook attempt for rule '{$ruleKey}' to help with rate limiting");
+        sleep(3);
+        
+        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            try {
+                $payload = $this->buildPayload($ruleKey, $rule, $results);
+                $headers = $this->buildHeaders($payload, $webhookSecret);
 
-            Log::info("Sending webhook for rule '{$ruleKey}' to: {$webhookUrl}");
-            Log::debug("Webhook payload for rule '{$ruleKey}': " . json_encode($payload, JSON_PRETTY_PRINT));
+                Log::info("Sending webhook for rule '{$ruleKey}' to: {$webhookUrl} (attempt {$attempt}/{$maxRetries})");
+                Log::debug("Webhook payload for rule '{$ruleKey}' (attempt {$attempt}): " . json_encode($payload, JSON_PRETTY_PRINT));
 
-            $response = $this->client->post($webhookUrl, [
-                'headers' => $headers,
-                'json' => $payload,
-            ]);
+                $response = $this->client->post($webhookUrl, [
+                    'headers' => $headers,
+                    'json' => $payload,
+                    'timeout' => 30.0, // Increase timeout for webhooks
+                ]);
 
-            $statusCode = $response->getStatusCode();
-            $responseBody = $response->getBody()->getContents();
-            
-            Log::debug("Webhook response for rule '{$ruleKey}': Status {$statusCode}, Body: {$responseBody}");
-            
-            if ($statusCode >= 200 && $statusCode < 300) {
-                Log::info("Webhook sent successfully for rule '{$ruleKey}'. Status: {$statusCode}");
-                return true;
-            } else {
-                Log::warning("Webhook failed for rule '{$ruleKey}'. Status: {$statusCode}, Response: {$responseBody}");
-                return false;
+                $statusCode = $response->getStatusCode();
+                $responseBody = $response->getBody()->getContents();
+                
+                Log::debug("Webhook response for rule '{$ruleKey}' (attempt {$attempt}): Status {$statusCode}, Body: {$responseBody}");
+                
+                if ($statusCode >= 200 && $statusCode < 300) {
+                    Log::info("Webhook sent successfully for rule '{$ruleKey}' (attempt {$attempt}). Status: {$statusCode}");
+                    return true;
+                } else {
+                    Log::warning("Webhook failed for rule '{$ruleKey}' (attempt {$attempt}). Status: {$statusCode}, Response: {$responseBody}");
+                    
+                    // If this is the last attempt, return false
+                    if ($attempt >= $maxRetries) {
+                        return false;
+                    }
+                    
+                    // Wait before retry with exponential backoff
+                    $delay = $baseDelay * pow(2, $attempt - 1); // 5s, 10s, 20s
+                    Log::info("Waiting {$delay} seconds before webhook retry for rule '{$ruleKey}'");
+                    sleep($delay);
+                }
+
+            } catch (\Exception $e) {
+                Log::error("Error sending webhook for rule '{$ruleKey}' (attempt {$attempt}): " . $e->getMessage());
+                
+                // If this is the last attempt, return false
+                if ($attempt >= $maxRetries) {
+                    return false;
+                }
+                
+                // Wait before retry with exponential backoff
+                $delay = $baseDelay * pow(2, $attempt - 1); // 5s, 10s, 20s
+                Log::info("Waiting {$delay} seconds before webhook retry for rule '{$ruleKey}' after exception");
+                sleep($delay);
             }
-
-        } catch (\Exception $e) {
-            Log::error("Error sending webhook for rule '{$ruleKey}': " . $e->getMessage());
-            return false;
         }
+        
+        return false;
     }
 
     /**
@@ -95,7 +127,15 @@ class WebhookService
      */
     private function buildPayload(string $ruleKey, array $rule, array $results): array
     {
-        return [
+        $contacts = $results['contacts'] ?? [];
+        $contactsCount = count($contacts);
+        
+        // If there are many contacts, exclude them from the payload to reduce size
+        // This helps with webhook reliability, especially for Zapier
+        $maxContactsInPayload = 10; // Only include first 10 contacts in webhook
+        $includeAllContacts = $contactsCount <= $maxContactsInPayload;
+        
+        $payload = [
             'event' => 'rule_execution_completed',
             'timestamp' => now()->toISOString(),
             'rule' => [
@@ -117,9 +157,18 @@ class WebhookService
                 'allowed_countries' => $rule['search_parameters']['allowed_countries'] ?? [],
                 'max_results' => $rule['search_parameters']['max_results'] ?? 0,
             ],
-            // Include contact details if available
-            'contacts' => $results['contacts'] ?? [],
         ];
+        
+        // Include contact details based on count
+        if ($includeAllContacts) {
+            $payload['contacts'] = $contacts;
+        } else {
+            // Include only first few contacts and add a note
+            $payload['contacts'] = array_slice($contacts, 0, $maxContactsInPayload);
+            $payload['contacts_note'] = "Showing first {$maxContactsInPayload} of {$contactsCount} contacts. Full contact list available in rule execution results.";
+        }
+        
+        return $payload;
     }
 
     /**
