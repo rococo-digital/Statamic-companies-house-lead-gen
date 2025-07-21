@@ -58,6 +58,9 @@ class WebhookService
 
                 Log::info("Sending webhook for rule '{$ruleKey}' to: {$webhookUrl} (attempt {$attempt}/{$maxRetries})");
                 Log::debug("Webhook payload for rule '{$ruleKey}' (attempt {$attempt}): " . json_encode($payload, JSON_PRETTY_PRINT));
+                Log::info("Webhook payload size for rule '{$ruleKey}' (attempt {$attempt}): " . strlen(json_encode($payload)) . " bytes");
+                Log::info("Webhook HTTP method: POST");
+                Log::info("Webhook headers: " . json_encode($headers));
 
                 $response = $this->client->post($webhookUrl, [
                     'headers' => $headers,
@@ -75,6 +78,7 @@ class WebhookService
                     return true;
                 } else {
                     Log::warning("Webhook failed for rule '{$ruleKey}' (attempt {$attempt}). Status: {$statusCode}, Response: {$responseBody}");
+                    Log::error("Full webhook failure details for rule '{$ruleKey}' (attempt {$attempt}): Status {$statusCode}, URL: {$webhookUrl}, Response: {$responseBody}");
                     
                     // If this is the last attempt, return false
                     if ($attempt >= $maxRetries) {
@@ -89,6 +93,7 @@ class WebhookService
 
             } catch (\Exception $e) {
                 Log::error("Error sending webhook for rule '{$ruleKey}' (attempt {$attempt}): " . $e->getMessage());
+                Log::error("Full error details for rule '{$ruleKey}' (attempt {$attempt}): " . $e->__toString());
                 
                 // If this is the last attempt, return false
                 if ($attempt >= $maxRetries) {
