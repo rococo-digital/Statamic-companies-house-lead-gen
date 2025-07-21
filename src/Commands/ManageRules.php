@@ -42,6 +42,8 @@ class ManageRules extends Command
                 return $this->clearCache();
             case 'rate-limits':
                 return $this->showRateLimits();
+            case 'regenerate-config':
+                return $this->regenerateConfig();
             default:
                 $this->error("Unknown action: {$action}");
                 $this->showHelp();
@@ -455,6 +457,7 @@ class ManageRules extends Command
         $this->line('  test <rule>    - Test/run a specific rule');
         $this->line('  clear-cache    - Clear rate limit caches and reset error tracking');
         $this->line('  rate-limits    - Show current Apollo API rate limit status');
+        $this->line('  regenerate-config - Regenerate the ch-lead-gen.php configuration file with all necessary settings including the Apollo safety margin.');
         $this->line('');
         $this->comment('Examples:');
         $this->line('  php artisan ch-lead-gen:rules list');
@@ -463,5 +466,240 @@ class ManageRules extends Command
         $this->line('  php artisan ch-lead-gen:rules test six_month_companies');
         $this->line('  php artisan ch-lead-gen:rules clear-cache');
         $this->line('  php artisan ch-lead-gen:rules rate-limits');
+        $this->line('  php artisan ch-lead-gen:rules regenerate-config');
+    }
+
+    /**
+     * Regenerate the ch-lead-gen.php configuration file
+     */
+    protected function regenerateConfig(): int
+    {
+        $this->info('🔄 Regenerating ch-lead-gen.php configuration file...');
+        
+        $configPath = config_path('ch-lead-gen.php');
+        $backupPath = $configPath . '.backup.' . time();
+        
+        // Create backup of existing config if it exists
+        if (file_exists($configPath)) {
+            if (copy($configPath, $backupPath)) {
+                $this->line("✅ Created backup: " . basename($backupPath));
+            } else {
+                $this->warn("⚠️  Could not create backup of existing config");
+            }
+        }
+        
+        // Generate the new configuration
+        $configContent = $this->generateConfigContent();
+        
+        // Write the new configuration
+        if (file_put_contents($configPath, $configContent)) {
+            $this->info('✅ Configuration file regenerated successfully!');
+            $this->line('');
+            $this->comment('The new configuration includes:');
+            $this->line('  • Apollo API safety margin (90%)');
+            $this->line('  • Dynamic rate limiting settings');
+            $this->line('  • All necessary API configurations');
+            $this->line('  • Default rule templates');
+            $this->line('');
+            $this->comment('Please review the configuration and update your API keys if needed.');
+            return 0;
+        } else {
+            $this->error('❌ Failed to write configuration file');
+            return 1;
+        }
+    }
+
+    /**
+     * Generate the configuration file content
+     */
+    private function generateConfigContent(): string
+    {
+        return '<?php
+
+return [
+    /*
+    |--------------------------------------------------------------------------
+    | API Keys
+    |--------------------------------------------------------------------------
+    |
+    | Your API keys for Companies House, Apollo, and Instantly.
+    | You can also set these via environment variables.
+    |
+    */
+    \'companies_house_api_key\' => env(\'COMPANIES_HOUSE_API_KEY\', \'0b2b07f1-8c95-4249-8fd0-7a2054e8271b\'),
+    \'apollo_api_key\' => env(\'APOLLO_API_KEY\', \'Qzu0D6yRfIebJg5AWbFZkw\'),
+    \'apollo_master_api_key\' => env(\'APOLLO_MASTER_API_KEY\', \'Qzu0D6yRfIebJg5AWbFZkw\'),
+    \'instantly_api_key\' => env(\'INSTANTLY_API_KEY\', \'NjViYTVhYTYtNjhiZi00MDlkLTliOGEtZDMwYTkyYjA1MzUzOm5OYWthQ0VHZndZRw==\'),
+    
+    /*
+    |--------------------------------------------------------------------------
+    | Default Values for New Rules
+    |--------------------------------------------------------------------------
+    |
+    | Default values used when creating new rules in the control panel.
+    |
+    */
+    \'defaults\' => [
+        \'max_results\' => 50,
+        \'apollo_batch_size\' => 25,
+        \'rate_limit_delay\' => 2,
+    ],
+    
+    /*
+    |--------------------------------------------------------------------------
+    | Apollo API Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configure Apollo API rate limiting and safety settings.
+    |
+    */
+    \'apollo\' => [
+        \'dynamic_limits\' => true,
+        \'fallback_limits\' => [
+            \'per_minute\' => 50,
+            \'per_hour\' => 200,
+            \'per_day\' => 600,
+        ],
+        \'safety_margin\' => 0.9, // 90% of actual limits
+    ],
+    
+    /*
+    |--------------------------------------------------------------------------
+    | Lead Generation Rules
+    |--------------------------------------------------------------------------
+    |
+    | Define multiple rules for lead generation. Each rule can have different
+    | search parameters, schedules, and target lead lists.
+    |
+    */
+    \'rules\' => [
+        \'six_month_companies\' => [
+            \'name\' => \'6 Month Old Companies\',
+            \'description\' => \'Find companies that are 180 days old\',
+            \'enabled\' => \'1\',
+            \'search_parameters\' => [
+                \'days_ago\' => \'178\',
+                \'company_status\' => \'active\',
+                \'company_type\' => \'ltd\',
+                \'allowed_countries\' => [
+                    0 => \'GB\',
+                ],
+                \'max_results\' => \'1\',
+                \'check_confirmation_statement\' => false,
+            ],
+            \'schedule\' => [
+                \'enabled\' => \'1\',
+                \'frequency\' => \'daily\',
+                \'time\' => \'09:00\',
+                \'day_of_week\' => \'1\',
+                \'day_of_month\' => \'1\',
+            ],
+            \'instantly\' => [
+                \'enabled\' => \'0\',
+                \'lead_list_name\' => \'CH - 6 Month Companies\',
+                \'enable_enrichment\' => \'0\',
+            ],
+            \'webhook\' => [
+                \'enabled\' => \'1\',
+                \'url\' => \'https://hooks.zapier.com/hooks/catch/516867/u39onti/\',
+                \'secret\' => \'\',
+            ],
+        ],
+        \'confirmation_statement_missing\' => [
+            \'name\' => \'Companies Missing Confirmation Statements\',
+            \'description\' => \'Find companies 350+ days old missing confirmation statements\',
+            \'enabled\' => \'0\',
+            \'search_parameters\' => [
+                \'days_ago\' => \'350\',
+                \'company_status\' => \'active\',
+                \'company_type\' => \'ltd\',
+                \'allowed_countries\' => [
+                    0 => \'GB\',
+                ],
+                \'max_results\' => \'0\',
+                \'check_confirmation_statement\' => \'1\',
+            ],
+            \'schedule\' => [
+                \'enabled\' => \'1\',
+                \'frequency\' => \'daily\',
+                \'time\' => \'10:00\',
+                \'day_of_week\' => \'1\',
+                \'day_of_month\' => \'1\',
+            ],
+            \'instantly\' => [
+                \'enabled\' => \'1\',
+                \'lead_list_name\' => \'CH - Missing Confirmation Statements\',
+                \'enable_enrichment\' => \'0\',
+            ],
+            \'webhook\' => [
+                \'enabled\' => \'1\',
+                \'url\' => \'https://hooks.zapier.com/hooks/catch/5980093/u3oj7sb/\',
+                \'secret\' => \'\',
+            ],
+        ],
+    ],
+    
+    /*
+    |--------------------------------------------------------------------------
+    | Global Schedule Settings (Legacy)
+    |--------------------------------------------------------------------------
+    |
+    | These settings are kept for backward compatibility but individual
+    | rule schedules take precedence.
+    |
+    */
+    \'schedule\' => [
+        \'enabled\' => true,
+        \'frequency\' => \'daily\',
+        \'time\' => \'09:00\',
+    ],
+    
+    /*
+    |--------------------------------------------------------------------------
+    | Legacy Search Parameters (Deprecated)
+    |--------------------------------------------------------------------------
+    |
+    | These are kept for backward compatibility but should be migrated
+    | to the new rules system above.
+    |
+    */
+    \'search\' => [
+        \'months_ago\' => 11,
+        \'company_status\' => \'active\',
+        \'company_type\' => \'ltd\',
+        \'allowed_countries\' => [
+            0 => \'GB\',
+        ],
+    ],
+    
+    /*
+    |--------------------------------------------------------------------------
+    | Statistics & Monitoring
+    |--------------------------------------------------------------------------
+    |
+    | Configure how API usage statistics are tracked and stored.
+    |
+    */
+    \'stats\' => [
+        \'enabled\' => true,
+        \'retention_days\' => 90,
+        \'track_api_usage\' => true,
+        \'track_rule_performance\' => true,
+    ],
+    
+    /*
+    |--------------------------------------------------------------------------
+    | Logging
+    |--------------------------------------------------------------------------
+    |
+    | Configure logging settings for the lead generation process.
+    |
+    */
+    \'logging\' => [
+        \'enabled\' => true,
+        \'retention_days\' => 30,
+    ],
+];
+';
     }
 } 
