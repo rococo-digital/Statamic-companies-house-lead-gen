@@ -58,7 +58,7 @@
             <!-- Adjusted Limits (with safety margin) -->
             @if(!empty($canMakeApiCall['adjusted_limits']))
                 <div class="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-                    <div class="text-sm font-medium text-gray-800 mb-2">Adjusted Limits (with {{ config('ch-lead-gen.apollo.safety_margin', 0.6) * 100 }}% safety margin)</div>
+                    <div class="text-sm font-medium text-gray-800 mb-2">Adjusted Limits (with {{ config('ch-lead-gen.apollo.safety_margin', 0.9) * 100 }}% safety margin)</div>
                     <div class="text-sm text-gray-700">
                         @php
                             $adjustedLimits = $canMakeApiCall['adjusted_limits'];
