@@ -20,11 +20,6 @@ Route::name('ch-lead-gen.')->prefix('ch-lead-gen')->middleware('can:view ch-lead
     
     Route::get('/apollo-stats', [ApolloStatsController::class, 'index'])->name('apollo-stats');
     
-    // Horizon dashboard route
-    Route::get('/horizon', function () {
-        return view('horizon::app');
-    })->name('horizon');
-    
     // Rules management routes
     Route::prefix('rules')->name('rules.')->group(function () {
         Route::get('/', [RulesController::class, 'index'])->name('index');

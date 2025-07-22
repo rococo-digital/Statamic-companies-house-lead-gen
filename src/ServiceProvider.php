@@ -57,11 +57,6 @@ class ServiceProvider extends AddonServiceProvider
             __DIR__.'/../resources/views' => resource_path('views/vendor/ch-lead-gen'),
         ], 'ch-lead-gen-views');
 
-        // Publish Horizon configuration
-        $this->publishes([
-            __DIR__.'/../config/horizon.php' => config_path('horizon.php'),
-        ], 'ch-lead-gen-horizon');
-
         // Remove problematic asset publishing for now
         // Assets will be handled by Vite instead
         
@@ -78,7 +73,6 @@ class ServiceProvider extends AddonServiceProvider
                     $nav->item('Dashboard')->url(cp_route('ch-lead-gen.dashboard')),
                     $nav->item('Rules')->url(cp_route('ch-lead-gen.rules.index')),
                     $nav->item('Settings')->url(cp_route('ch-lead-gen.settings')),
-                    $nav->item('Queue Monitor')->url(cp_route('ch-lead-gen.horizon')),
                 ]);
         });
 
