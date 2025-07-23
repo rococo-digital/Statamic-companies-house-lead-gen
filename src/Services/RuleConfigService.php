@@ -5,6 +5,8 @@ namespace Rococo\ChLeadGen\Services;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
+use Carbon\Carbon;
 
 class RuleConfigService
 {
@@ -35,6 +37,15 @@ class RuleConfigService
         $config = $this->getConfig();
         $config['rules'][$ruleKey] = $ruleConfig;
         $this->writeConfig($config);
+        
+        // Set initial last run timestamp to prevent immediate execution
+        $lastRunCacheKey = "ch_lead_gen_rule_last_run_{$ruleKey}";
+        $initialLastRun = now()->subDay()->toISOString(); // Set to yesterday to prevent immediate execution
+        Cache::put($lastRunCacheKey, $initialLastRun, 86400); // Cache for 24 hours
+        
+        Log::info("Set initial last run timestamp for new rule '{$ruleKey}' to prevent immediate execution", [
+            'initial_last_run' => $initialLastRun
+        ]);
     }
 
     /**
@@ -48,8 +59,27 @@ class RuleConfigService
             throw new \Exception("Rule '{$ruleKey}' not found");
         }
 
+        // Preserve the last run cache to prevent immediate execution after update
+        $lastRunCacheKey = "ch_lead_gen_rule_last_run_{$ruleKey}";
+        $lastRun = Cache::get($lastRunCacheKey);
+
         $config['rules'][$ruleKey] = $ruleConfig;
         $this->writeConfig($config);
+        
+        // If there was a last run timestamp, preserve it to prevent immediate execution
+        if ($lastRun) {
+            Cache::put($lastRunCacheKey, $lastRun, 86400); // Cache for 24 hours
+            Log::info("Preserved last run timestamp for rule '{$ruleKey}' to prevent immediate execution", [
+                'last_run' => $lastRun
+            ]);
+        } else {
+            // If no last run timestamp exists, set one to prevent immediate execution
+            $initialLastRun = now()->subDay()->toISOString(); // Set to yesterday to prevent immediate execution
+            Cache::put($lastRunCacheKey, $initialLastRun, 86400); // Cache for 24 hours
+            Log::info("Set initial last run timestamp for updated rule '{$ruleKey}' to prevent immediate execution", [
+                'initial_last_run' => $initialLastRun
+            ]);
+        }
     }
 
     /**
@@ -65,6 +95,32 @@ class RuleConfigService
 
         unset($config['rules'][$ruleKey]);
         $this->writeConfig($config);
+        
+        // Clean up the last run cache for the deleted rule
+        $lastRunCacheKey = "ch_lead_gen_rule_last_run_{$ruleKey}";
+        Cache::forget($lastRunCacheKey);
+        
+        Log::info("Cleaned up last run cache for deleted rule '{$ruleKey}'");
+    }
+
+    /**
+     * Reset the last run timestamp for a rule (for testing purposes)
+     */
+    public function resetRuleLastRun(string $ruleKey): void
+    {
+        $lastRunCacheKey = "ch_lead_gen_rule_last_run_{$ruleKey}";
+        Cache::forget($lastRunCacheKey);
+        
+        Log::info("Reset last run timestamp for rule '{$ruleKey}' - rule will run on next scheduled execution");
+    }
+
+    /**
+     * Get the last run timestamp for a rule
+     */
+    public function getRuleLastRun(string $ruleKey): ?string
+    {
+        $lastRunCacheKey = "ch_lead_gen_rule_last_run_{$ruleKey}";
+        return Cache::get($lastRunCacheKey);
     }
 
     /**

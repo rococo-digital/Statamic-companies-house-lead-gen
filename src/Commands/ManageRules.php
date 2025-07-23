@@ -44,6 +44,8 @@ class ManageRules extends Command
                 return $this->showRateLimits();
             case 'regenerate-config':
                 return $this->regenerateConfig();
+            case 'reset-last-run':
+                return $this->resetLastRun($ruleKey);
             default:
                 $this->error("Unknown action: {$action}");
                 $this->showHelp();
@@ -455,6 +457,7 @@ class ManageRules extends Command
         $this->line('  show <rule>    - Show detailed information about a rule');
         $this->line('  stats <rule>   - Show statistics for a rule');
         $this->line('  test <rule>    - Test/run a specific rule');
+        $this->line('  reset-last-run <rule> - Reset last run timestamp for testing');
         $this->line('  clear-cache    - Clear rate limit caches and reset error tracking');
         $this->line('  rate-limits    - Show current Apollo API rate limit status');
         $this->line('  regenerate-config - Regenerate the ch-lead-gen.php configuration file with all necessary settings including the Apollo safety margin.');
@@ -464,6 +467,7 @@ class ManageRules extends Command
         $this->line('  php artisan ch-lead-gen:rules show six_month_companies');
         $this->line('  php artisan ch-lead-gen:rules stats confirmation_statement_missing');
         $this->line('  php artisan ch-lead-gen:rules test six_month_companies');
+        $this->line('  php artisan ch-lead-gen:rules reset-last-run six_month_companies');
         $this->line('  php artisan ch-lead-gen:rules clear-cache');
         $this->line('  php artisan ch-lead-gen:rules rate-limits');
         $this->line('  php artisan ch-lead-gen:rules regenerate-config');
@@ -505,6 +509,40 @@ class ManageRules extends Command
             return 0;
         } else {
             $this->error('❌ Failed to write configuration file');
+            return 1;
+        }
+    }
+
+    /**
+     * Reset the last run timestamp for a rule
+     */
+    protected function resetLastRun(?string $ruleKey): int
+    {
+        if (!$ruleKey) {
+            $this->error('Rule key is required for reset-last-run action.');
+            $this->line('');
+            $this->comment('Usage: php artisan ch-lead-gen:rules reset-last-run <rule_key>');
+            return 1;
+        }
+
+        $rule = $this->ruleManagerService->getRule($ruleKey);
+        if (!$rule) {
+            $this->error("Rule '{$ruleKey}' not found.");
+            return 1;
+        }
+
+        try {
+            // Get the RuleConfigService to reset the last run
+            $ruleConfigService = app('Rococo\ChLeadGen\Services\RuleConfigService');
+            $ruleConfigService->resetRuleLastRun($ruleKey);
+            
+            $this->info("✅ Reset last run timestamp for rule '{$ruleKey}' ({$rule['name']})");
+            $this->line('');
+            $this->comment("The rule will now run on its next scheduled execution.");
+            
+            return 0;
+        } catch (\Exception $e) {
+            $this->error("Failed to reset last run timestamp: " . $e->getMessage());
             return 1;
         }
     }

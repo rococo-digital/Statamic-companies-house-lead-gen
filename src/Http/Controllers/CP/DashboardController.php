@@ -241,7 +241,7 @@ class DashboardController extends Controller
             'Starting lead generation job' => '🚀 Starting lead generation job...',
             'Starting rule execution:' => '🎯 Starting rule:',
             'Completed rule execution:' => '✅ Completed rule:',
-            'Job dispatched successfully' => '✅ Job started successfully',
+            'Job dispatched successfully' => '✅ Job dispatched successfully',
             'Found 0 companies from API' => '⚠️ No companies found for the specified criteria',
             'No companies found matching criteria' => '📄 Search completed - no matching companies',
             'Processing company for rule' => '🏢 Processing company for rule',

@@ -76,8 +76,17 @@ class RunLeadGeneration implements ShouldQueue
                 return;
             }
 
-            Log::info('=== Lead generation job completed ===', ['job_id' => $this->jobId, 'result' => $result]);
-            $jobTracking->completeJob($this->jobId, $result);
+            // Check if the job completed with partial results due to rate limits
+            if (isset($result['rate_limit_reached']) && $result['rate_limit_reached']) {
+                Log::info('=== Lead generation job completed with partial results due to rate limits ===', [
+                    'job_id' => $this->jobId, 
+                    'result' => $result
+                ]);
+                $jobTracking->completeJobWithPartialResults($this->jobId, $result);
+            } else {
+                Log::info('=== Lead generation job completed ===', ['job_id' => $this->jobId, 'result' => $result]);
+                $jobTracking->completeJob($this->jobId, $result);
+            }
 
         } catch (\Exception $e) {
             Log::error('=== Error in lead generation job ===', ['job_id' => $this->jobId]);
@@ -143,9 +152,11 @@ class RunLeadGeneration implements ShouldQueue
         
         $successCount = 0;
         $failureCount = 0;
+        $partialCount = 0;
         $totalCompanies = 0;
         $totalContacts = 0;
         $totalAdded = 0;
+        $anyPartialExecution = false;
 
         foreach ($results as $ruleKey => $result) {
             if ($result['success']) {
@@ -153,6 +164,12 @@ class RunLeadGeneration implements ShouldQueue
                 $totalCompanies += $result['companies_found'] ?? 0;
                 $totalContacts += $result['contacts_found'] ?? 0;
                 $totalAdded += $result['contacts_added'] ?? 0;
+                
+                // Check if this rule had partial execution due to rate limits
+                if (isset($result['partial_execution']) && $result['partial_execution']) {
+                    $partialCount++;
+                    $anyPartialExecution = true;
+                }
             } else {
                 $failureCount++;
             }
@@ -162,19 +179,24 @@ class RunLeadGeneration implements ShouldQueue
             'total_rules' => count($results),
             'successful' => $successCount,
             'failed' => $failureCount,
+            'partial_executions' => $partialCount,
             'total_companies' => $totalCompanies,
             'total_contacts' => $totalContacts,
             'total_added' => $totalAdded,
+            'any_partial_execution' => $anyPartialExecution,
         ]);
 
         return [
             'total_rules' => count($results),
             'successful' => $successCount,
             'failed' => $failureCount,
+            'partial_executions' => $partialCount,
             'total_companies' => $totalCompanies,
             'total_contacts' => $totalContacts,
             'total_added' => $totalAdded,
             'results' => $results,
+            'rate_limit_reached' => $anyPartialExecution,
+            'partial_execution' => $anyPartialExecution,
         ];
     }
 

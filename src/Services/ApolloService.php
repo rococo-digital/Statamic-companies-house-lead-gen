@@ -764,6 +764,71 @@ class ApolloService
     }
 
     /**
+     * Check if hourly rate limit is approaching (for graceful job termination)
+     * 
+     * @param int|null $hourlyThreshold Minimum hourly requests needed to continue (uses config if null)
+     * @param int|null $minuteThreshold Minimum minute requests needed to continue (uses config if null)
+     * @return array
+     */
+    public function isHourlyLimitApproaching(?int $hourlyThreshold = null, ?int $minuteThreshold = null): array
+    {
+        try {
+            // Use config values if not provided
+            if ($hourlyThreshold === null) {
+                $hourlyThreshold = $this->config['apollo']['rate_limit_thresholds']['hourly_stop_threshold'] ?? 10;
+            }
+            if ($minuteThreshold === null) {
+                $minuteThreshold = $this->config['apollo']['rate_limit_thresholds']['minute_stop_threshold'] ?? 3;
+            }
+            
+            // Check if graceful stop is enabled
+            $enableGracefulStop = $this->config['apollo']['rate_limit_thresholds']['enable_graceful_stop'] ?? true;
+            if (!$enableGracefulStop) {
+                return [
+                    'should_stop' => false,
+                    'hourly_remaining' => 0,
+                    'minute_remaining' => 0,
+                    'hourly_threshold' => $hourlyThreshold,
+                    'minute_threshold' => $minuteThreshold,
+                    'reason' => 'graceful_stop_disabled',
+                    'message' => 'Graceful stop is disabled in configuration'
+                ];
+            }
+            
+            $canMakeApiCall = $this->canMakeApiCall();
+            
+            $hourlyRemaining = $canMakeApiCall['hour_remaining'] ?? 0;
+            $minuteRemaining = $canMakeApiCall['minute_remaining'] ?? 0;
+            
+            $shouldStop = $hourlyRemaining <= $hourlyThreshold || $minuteRemaining <= $minuteThreshold;
+            
+            return [
+                'should_stop' => $shouldStop,
+                'hourly_remaining' => $hourlyRemaining,
+                'minute_remaining' => $minuteRemaining,
+                'hourly_threshold' => $hourlyThreshold,
+                'minute_threshold' => $minuteThreshold,
+                'reason' => $shouldStop ? 'rate_limit_approaching' : 'ok',
+                'message' => $shouldStop 
+                    ? "Rate limits approaching: hourly remaining {$hourlyRemaining}, minute remaining {$minuteRemaining}"
+                    : "Rate limits sufficient to continue"
+            ];
+            
+        } catch (\Exception $e) {
+            Log::error("Error checking hourly rate limit: " . $e->getMessage());
+            return [
+                'should_stop' => false,
+                'hourly_remaining' => 0,
+                'minute_remaining' => 0,
+                'hourly_threshold' => $hourlyThreshold ?? 10,
+                'minute_threshold' => $minuteThreshold ?? 3,
+                'reason' => 'error_checking_limits',
+                'message' => 'Error checking rate limits, continuing processing'
+            ];
+        }
+    }
+
+    /**
      * Get Apollo API usage statistics and rate limits
      * 
      * @return array|null

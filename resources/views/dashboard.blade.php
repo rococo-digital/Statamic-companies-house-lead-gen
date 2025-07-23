@@ -341,6 +341,47 @@
                 </div>
             </div>
         </div>
+    @elseif($currentJob && $currentJob['status'] === 'completed_partial')
+        <div class="card p-4 mb-6 bg-yellow-50 border-2 border-yellow-200">
+            <div class="flex items-center justify-between mb-3">
+                <h2 class="text-lg font-semibold text-yellow-800">⚠️ Job Completed with Partial Results</h2>
+                <span class="text-sm text-yellow-600">Rate Limit Reached</span>
+            </div>
+            <div class="text-sm text-yellow-700 space-y-2">
+                <div class="flex items-center space-x-2">
+                    <span class="w-2 h-2 bg-yellow-500 rounded-full"></span>
+                    <span><strong>Job ID:</strong> {{ $currentJob['job_id'] }}</span>
+                </div>
+                @if($currentJob['rule_key'])
+                    <div class="flex items-center space-x-2">
+                        <span class="w-2 h-2 bg-yellow-500 rounded-full"></span>
+                        <span><strong>Rule:</strong> {{ $currentJob['rule_key'] }}</span>
+                    </div>
+                @endif
+                <div class="flex items-center space-x-2">
+                    <span class="w-2 h-2 bg-yellow-500 rounded-full"></span>
+                    <span><strong>Completed:</strong> {{ \Carbon\Carbon::parse($currentJob['completed_at'])->diffForHumans() }}</span>
+                </div>
+                @if($currentJob['result'])
+                    <div class="flex items-center space-x-2">
+                        <span class="w-2 h-2 bg-yellow-500 rounded-full"></span>
+                        <span><strong>Companies Processed:</strong> {{ $currentJob['result']['companies_processed'] ?? 0 }} of {{ $currentJob['result']['companies_found'] ?? 0 }}</span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span class="w-2 h-2 bg-yellow-500 rounded-full"></span>
+                        <span><strong>Contacts Found:</strong> {{ $currentJob['result']['contacts_found'] ?? 0 }}</span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span class="w-2 h-2 bg-yellow-500 rounded-full"></span>
+                        <span><strong>Contacts Added:</strong> {{ $currentJob['result']['contacts_added'] ?? 0 }}</span>
+                    </div>
+                @endif
+                <div class="mt-3 p-2 bg-yellow-100 rounded text-xs">
+                    <strong>Note:</strong> This job was stopped early due to Apollo API rate limits. 
+                    The contacts found so far have been processed and added to your lead list.
+                </div>
+            </div>
+        </div>
     @endif
 
     <!-- Activity Log -->

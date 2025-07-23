@@ -193,12 +193,27 @@ class RuleManagerService
             // Step 2: Find people and enrich with Apollo
             $allContacts = [];
             $processedCount = 0;
+            $rateLimitReached = false;
 
             foreach ($companies as $company) {
                 // Check for job cancellation
                 if ($jobTracking && $jobId && $jobTracking->isJobCancelled($jobId)) {
                     Log::info("Job cancelled during company processing for rule '{$ruleKey}'");
                     throw new \Exception('Job cancelled by user');
+                }
+
+                // Check hourly rate limits before processing each company
+                $rateLimitCheck = $this->checkHourlyRateLimit();
+                if ($rateLimitCheck['should_stop']) {
+                    Log::warning("Hourly rate limit reached during processing. Stopping with partial results.", [
+                        'companies_processed' => $processedCount,
+                        'total_companies' => $companiesCount,
+                        'contacts_found_so_far' => count($allContacts),
+                        'hourly_remaining' => $rateLimitCheck['hourly_remaining'],
+                        'minute_remaining' => $rateLimitCheck['minute_remaining']
+                    ]);
+                    $rateLimitReached = true;
+                    break;
                 }
 
                 $companyName = $company['company_name'] ?? $company['title'] ?? 'Unknown';
@@ -271,14 +286,25 @@ class RuleManagerService
 
             // Mark rule as run and record execution time
             $executionTime = round(microtime(true) - $startTime, 2);
-            $this->markRuleAsRun($ruleKey);
+            
+            // Only mark as run if we completed all companies (not stopped due to rate limits)
+            if (!$rateLimitReached) {
+                $this->markRuleAsRun($ruleKey);
+            }
+            
             $this->statsService->completeRuleExecution($ruleKey, $companiesCount, count($allContacts), $contactsAdded, $executionTime);
 
-            Log::info("=== Completed rule execution: {$ruleKey} ===", [
+            $completionMessage = $rateLimitReached 
+                ? "=== Rule execution stopped due to rate limits: {$ruleKey} ==="
+                : "=== Completed rule execution: {$ruleKey} ===";
+                
+            Log::info($completionMessage, [
                 'companies_found' => $companiesCount,
+                'companies_processed' => $processedCount,
                 'contacts_found' => count($allContacts),
                 'contacts_added' => $contactsAdded,
-                'execution_time' => $executionTime
+                'execution_time' => $executionTime,
+                'rate_limit_reached' => $rateLimitReached
             ]);
 
             // Send webhook notification if enabled
@@ -287,10 +313,13 @@ class RuleManagerService
                 'rule_key' => $ruleKey,
                 'rule_name' => $rule['name'],
                 'companies_found' => $companiesCount,
+                'companies_processed' => $processedCount,
                 'contacts_found' => count($allContacts),
                 'contacts_added' => $contactsAdded,
                 'execution_time' => $executionTime,
                 'contacts' => $allContacts, // Include contact details for webhook
+                'rate_limit_reached' => $rateLimitReached,
+                'partial_execution' => $rateLimitReached,
             ];
 
             // Check webhook configuration before attempting to send
@@ -594,5 +623,30 @@ class RuleManagerService
         
         // If we have more than 5 rate limit errors in the last 10 minutes, pause
         return count($errors) >= 5;
+    }
+
+    /**
+     * Check if hourly rate limit is approaching and we should stop processing
+     * 
+     * @return array
+     */
+    protected function checkHourlyRateLimit(): array
+    {
+        // Use the ApolloService method for consistent rate limit checking
+        // This will use configurable thresholds from the config file
+        $result = $this->apolloService->isHourlyLimitApproaching();
+        
+        if ($result['should_stop']) {
+            Log::warning("Hourly rate limit approaching - stopping processing", [
+                'hourly_remaining' => $result['hourly_remaining'],
+                'minute_remaining' => $result['minute_remaining'],
+                'hourly_threshold' => $result['hourly_threshold'],
+                'minute_threshold' => $result['minute_threshold'],
+                'message' => $result['message'],
+                'reason' => $result['reason']
+            ]);
+        }
+        
+        return $result;
     }
 } 

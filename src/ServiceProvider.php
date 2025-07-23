@@ -8,6 +8,7 @@ use Statamic\Facades\Permission;
 use Illuminate\Support\Facades\Schedule;
 use Rococo\ChLeadGen\Commands\RunLeadGeneration;
 use Rococo\ChLeadGen\Commands\ManageRules;
+use Rococo\ChLeadGen\Commands\TestRateLimitDetection;
 use Rococo\ChLeadGen\Http\Controllers\CP\DashboardController;
 use Rococo\ChLeadGen\Http\Controllers\CP\SettingsController;
 use Rococo\ChLeadGen\Services\RuleManagerService;
@@ -43,6 +44,7 @@ class ServiceProvider extends AddonServiceProvider
         $this->commands([
             RunLeadGeneration::class,
             ManageRules::class,
+            TestRateLimitDetection::class,
         ]);
 
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'ch-lead-gen');

@@ -103,6 +103,32 @@ class JobTrackingService
     }
 
     /**
+     * Complete a job with partial results due to rate limits
+     */
+    public function completeJobWithPartialResults(string $jobId, array $result = []): void
+    {
+        $jobInfo = $this->getJob($jobId);
+        if (!$jobInfo) {
+            return;
+        }
+
+        $jobInfo['status'] = 'completed_partial';
+        $jobInfo['completed_at'] = now()->toISOString();
+        $jobInfo['result'] = $result;
+        $jobInfo['partial_reason'] = 'rate_limit_reached';
+
+        Cache::put($this->cachePrefix . $jobId, $jobInfo, $this->cacheExpiry);
+        
+        // Clear current job reference if this was the current job
+        $currentJobId = Cache::get($this->cachePrefix . 'current_job');
+        if ($currentJobId === $jobId) {
+            Cache::forget($this->cachePrefix . 'current_job');
+        }
+        
+        Log::info("Completed job with partial results due to rate limits: {$jobId}", $result);
+    }
+
+    /**
      * Cancel a job
      */
     public function cancelJob(string $jobId): bool
