@@ -125,7 +125,7 @@ class RuleManagerService
     /**
      * Execute a specific rule
      */
-    public function executeRule(string $ruleKey, bool $forceRun = false, ?JobTrackingService $jobTracking = null, ?string $jobId = null): array
+    public function executeRule(string $ruleKey, bool $forceRun = false, ?JobTrackingService $jobTracking = null, ?string $jobId = null, bool $skipCreditCheck = false): array
     {
         $rule = $this->getRule($ruleKey);
         
@@ -143,33 +143,37 @@ class RuleManagerService
         $this->statsService->startRuleExecution($ruleKey);
 
         try {
-            // Pre-execution credit check for Apollo
-            Log::info("Performing pre-execution Apollo credit check for rule '{$ruleKey}'");
-            $creditCheck = $this->apolloService->checkApolloCredits();
-            $canMakeApiCall = $this->apolloService->canMakeApiCall();
-            
-            if (!$creditCheck['has_credits']) {
-                $errorMessage = "Apollo API insufficient credits detected before rule execution: " . $creditCheck['message'];
-                Log::error($errorMessage);
-                throw new \Exception($errorMessage);
+            // Pre-execution credit check for Apollo (skip if already done globally)
+            if (!$skipCreditCheck) {
+                Log::info("Performing pre-execution Apollo credit check for rule '{$ruleKey}'");
+                $creditCheck = $this->apolloService->checkApolloCredits();
+                $canMakeApiCall = $this->apolloService->canMakeApiCall();
+                
+                if (!$creditCheck['has_credits']) {
+                    $errorMessage = "Apollo API insufficient credits detected before rule execution: " . $creditCheck['message'];
+                    Log::error($errorMessage);
+                    throw new \Exception($errorMessage);
+                }
+                
+                if (!$canMakeApiCall['can_proceed']) {
+                    $errorMessage = "Apollo API rate limits insufficient for rule execution. " . 
+                                   "Minute remaining: {$canMakeApiCall['minute_remaining']}, " .
+                                   "Hour remaining: {$canMakeApiCall['hour_remaining']}, " .
+                                   "Day remaining: {$canMakeApiCall['day_remaining']}";
+                    Log::error($errorMessage);
+                    throw new \Exception($errorMessage);
+                }
+                
+                Log::info("Apollo credit check passed for rule '{$ruleKey}'", [
+                    'credits_available' => $creditCheck['has_credits'],
+                    'can_make_api_calls' => $canMakeApiCall['can_proceed'],
+                    'minute_remaining' => $canMakeApiCall['minute_remaining'],
+                    'hour_remaining' => $canMakeApiCall['hour_remaining'],
+                    'day_remaining' => $canMakeApiCall['day_remaining']
+                ]);
+            } else {
+                Log::info("Skipping individual Apollo credit check for rule '{$ruleKey}' (global check already performed)");
             }
-            
-            if (!$canMakeApiCall['can_proceed']) {
-                $errorMessage = "Apollo API rate limits insufficient for rule execution. " . 
-                               "Minute remaining: {$canMakeApiCall['minute_remaining']}, " .
-                               "Hour remaining: {$canMakeApiCall['hour_remaining']}, " .
-                               "Day remaining: {$canMakeApiCall['day_remaining']}";
-                Log::error($errorMessage);
-                throw new \Exception($errorMessage);
-            }
-            
-            Log::info("Apollo credit check passed for rule '{$ruleKey}'", [
-                'credits_available' => $creditCheck['has_credits'],
-                'can_make_api_calls' => $canMakeApiCall['can_proceed'],
-                'minute_remaining' => $canMakeApiCall['minute_remaining'],
-                'hour_remaining' => $canMakeApiCall['hour_remaining'],
-                'day_remaining' => $canMakeApiCall['day_remaining']
-            ]);
 
             // Step 1: Search for companies
             $companies = $this->searchCompaniesForRule($ruleKey, $rule);
@@ -402,7 +406,7 @@ class RuleManagerService
             }
 
             try {
-                $results[$ruleKey] = $this->executeRule($ruleKey, false, $jobTracking, $jobId);
+                $results[$ruleKey] = $this->executeRule($ruleKey, false, $jobTracking, $jobId, true); // Skip credit check since global check already done
             } catch (\Exception $e) {
                 Log::error("Failed to execute rule {$ruleKey}: " . $e->getMessage());
                 $results[$ruleKey] = [

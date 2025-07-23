@@ -637,7 +637,21 @@ class ApolloService
      */
     public function checkApolloCredits()
     {
+        // Cache credit check results for 1 hour to prevent excessive API calls
+        $cacheKey = 'apollo_credit_check_result';
+        $cachedResult = Cache::get($cacheKey);
+        
+        if ($cachedResult !== null) {
+            Log::info("Using cached Apollo credit check result", [
+                'has_credits' => $cachedResult['has_credits'],
+                'cached_at' => $cachedResult['cached_at'] ?? 'unknown'
+            ]);
+            return $cachedResult;
+        }
+
         try {
+            Log::info("Performing fresh Apollo credit check (not cached)");
+            
             // Instead of relying on the potentially unreliable rate limits endpoint,
             // make a real API call to test if credits are actually available
             $testResponse = $this->client->post(self::APOLLO_API_PEOPLE_SEARCH_URL, [
@@ -656,16 +670,28 @@ class ApolloService
             // If we get a successful response, we have credits
             $statusCode = $testResponse->getStatusCode();
             if ($statusCode === 200) {
-                return [
+                $result = [
                     'has_credits' => true,
-                    'message' => 'Apollo account has sufficient credits (verified with test API call)'
+                    'message' => 'Apollo account has sufficient credits (verified with test API call)',
+                    'cached_at' => now()->toISOString()
                 ];
+                
+                // Cache the result for 1 hour
+                Cache::put($cacheKey, $result, now()->addHour());
+                
+                return $result;
             }
             
-            return [
+            $result = [
                 'has_credits' => false,
-                'message' => 'Unexpected response from Apollo API: HTTP ' . $statusCode
+                'message' => 'Unexpected response from Apollo API: HTTP ' . $statusCode,
+                'cached_at' => now()->toISOString()
             ];
+            
+            // Cache negative results for a shorter time (30 minutes) to allow for recovery
+            Cache::put($cacheKey, $result, now()->addMinutes(30));
+            
+            return $result;
             
         } catch (\GuzzleHttp\Exception\ClientException $e) {
             $statusCode = $e->getResponse()->getStatusCode();
@@ -674,22 +700,40 @@ class ApolloService
             if ($statusCode === 422) {
                 $responseData = json_decode($responseBody, true);
                 if (isset($responseData['error']) && strpos($responseData['error'], 'insufficient credits') !== false) {
-                    return [
+                    $result = [
                         'has_credits' => false,
-                        'message' => 'Apollo account has insufficient credits: ' . $responseData['error']
+                        'message' => 'Apollo account has insufficient credits: ' . $responseData['error'],
+                        'cached_at' => now()->toISOString()
                     ];
+                    
+                    // Cache insufficient credits for 2 hours to prevent repeated checks
+                    Cache::put($cacheKey, $result, now()->addHours(2));
+                    
+                    return $result;
                 }
             }
             
-            return [
+            $result = [
                 'has_credits' => false,
-                'message' => 'Error checking credits: ' . $e->getMessage()
+                'message' => 'Error checking credits: ' . $e->getMessage(),
+                'cached_at' => now()->toISOString()
             ];
+            
+            // Cache errors for 30 minutes
+            Cache::put($cacheKey, $result, now()->addMinutes(30));
+            
+            return $result;
         } catch (\Exception $e) {
-            return [
+            $result = [
                 'has_credits' => false,
-                'message' => 'Error checking credits: ' . $e->getMessage()
+                'message' => 'Error checking credits: ' . $e->getMessage(),
+                'cached_at' => now()->toISOString()
             ];
+            
+            // Cache errors for 30 minutes
+            Cache::put($cacheKey, $result, now()->addMinutes(30));
+            
+            return $result;
         }
     }
 
@@ -1116,7 +1160,19 @@ class ApolloService
         $currentHour = date('Y-m-d_H:i');
         Cache::forget('apollo_api_usage_' . $currentHour);
         
+        // Clear credit check cache
+        Cache::forget('apollo_credit_check_result');
+        
         Log::info("Cleared all Apollo API caches");
+    }
+
+    /**
+     * Clear only the credit check cache
+     */
+    public function clearCreditCheckCache()
+    {
+        Cache::forget('apollo_credit_check_result');
+        Log::info("Cleared Apollo credit check cache");
     }
 
     /**

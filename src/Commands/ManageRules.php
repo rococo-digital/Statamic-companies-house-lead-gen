@@ -40,6 +40,8 @@ class ManageRules extends Command
                 return $this->testRule($ruleKey);
             case 'clear-cache':
                 return $this->clearCache();
+            case 'clear-credit-cache':
+                return $this->clearCreditCache();
             case 'rate-limits':
                 return $this->showRateLimits();
             case 'regenerate-config':
@@ -356,9 +358,32 @@ class ManageRules extends Command
         }
         $this->line('✅ Cleared API usage tracking');
         
+        // Clear credit check cache
+        \Illuminate\Support\Facades\Cache::forget('apollo_credit_check_result');
+        $this->line('✅ Cleared Apollo credit check cache');
+        
         $this->info('🎉 All caches cleared successfully!');
         $this->line('');
         $this->comment('The system will now fetch fresh rate limit information from Apollo on the next request.');
+        
+        return 0;
+    }
+
+    /**
+     * Clear only the Apollo credit check cache
+     */
+    protected function clearCreditCache(): int
+    {
+        $this->info('🧹 Clearing Apollo credit check cache...');
+        
+        // Clear credit check cache
+        \Illuminate\Support\Facades\Cache::forget('apollo_credit_check_result');
+        $this->line('✅ Cleared Apollo credit check cache');
+        
+        $this->info('🎉 Credit check cache cleared successfully!');
+        $this->line('');
+        $this->comment('The system will now perform a fresh credit check on the next scheduled run.');
+        $this->comment('Use this command when Apollo credits have been replenished.');
         
         return 0;
     }
@@ -459,6 +484,7 @@ class ManageRules extends Command
         $this->line('  test <rule>    - Test/run a specific rule');
         $this->line('  reset-last-run <rule> - Reset last run timestamp for testing');
         $this->line('  clear-cache    - Clear rate limit caches and reset error tracking');
+        $this->line('  clear-credit-cache - Clear only the Apollo credit check cache');
         $this->line('  rate-limits    - Show current Apollo API rate limit status');
         $this->line('  regenerate-config - Regenerate the ch-lead-gen.php configuration file with all necessary settings including the Apollo safety margin.');
         $this->line('');
@@ -469,6 +495,7 @@ class ManageRules extends Command
         $this->line('  php artisan ch-lead-gen:rules test six_month_companies');
         $this->line('  php artisan ch-lead-gen:rules reset-last-run six_month_companies');
         $this->line('  php artisan ch-lead-gen:rules clear-cache');
+        $this->line('  php artisan ch-lead-gen:rules clear-credit-cache');
         $this->line('  php artisan ch-lead-gen:rules rate-limits');
         $this->line('  php artisan ch-lead-gen:rules regenerate-config');
     }
