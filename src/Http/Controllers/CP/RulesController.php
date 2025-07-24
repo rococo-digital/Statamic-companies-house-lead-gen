@@ -295,4 +295,41 @@ class RulesController extends Controller
             return back()->with('error', 'Failed to test webhook: ' . $e->getMessage());
         }
     }
+
+    public function testWebhookSimulation($ruleKey)
+    {
+        try {
+            $rule = $this->ruleManager->getRule($ruleKey);
+            
+            if (!$rule) {
+                return back()->with('error', 'Rule not found.');
+            }
+
+            if (!($rule['webhook']['enabled'] ?? false)) {
+                return back()->with('error', 'Webhook is not enabled for this rule.');
+            }
+
+            $webhookUrl = $rule['webhook']['url'] ?? '';
+            $webhookSecret = $rule['webhook']['secret'] ?? '';
+
+            if (empty($webhookUrl)) {
+                return back()->with('error', 'Webhook URL is not configured.');
+            }
+
+            // Test the webhook with simulation that matches real rule execution
+            $webhookService = app(\Rococo\ChLeadGen\Services\WebhookService::class);
+            $result = $webhookService->testWebhookWithRuleSimulation($webhookUrl, $webhookSecret);
+
+            if ($result['success']) {
+                $payloadSize = $result['payload_size'] ?? 'unknown';
+                return back()->with('success', "Webhook simulation test successful! Status: {$result['status_code']}, Payload size: {$payloadSize} bytes");
+            } else {
+                return back()->with('error', "Webhook simulation test failed: {$result['message']}");
+            }
+
+        } catch (\Exception $e) {
+            Log::error("Failed to test webhook simulation: " . $e->getMessage());
+            return back()->with('error', 'Failed to test webhook simulation: ' . $e->getMessage());
+        }
+    }
 } 

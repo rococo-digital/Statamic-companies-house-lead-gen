@@ -30,5 +30,6 @@ Route::name('ch-lead-gen.')->prefix('ch-lead-gen')->middleware('can:view ch-lead
         Route::delete('/{ruleKey}', [RulesController::class, 'destroy'])->middleware('can:delete ch-lead-gen')->name('destroy');
         Route::post('/{ruleKey}/duplicate', [RulesController::class, 'duplicate'])->middleware('can:create ch-lead-gen')->name('duplicate');
         Route::post('/{ruleKey}/test-webhook', [RulesController::class, 'testWebhook'])->middleware('can:edit ch-lead-gen')->name('test-webhook');
+        Route::post('/{ruleKey}/test-webhook-simulation', [RulesController::class, 'testWebhookSimulation'])->middleware('can:edit ch-lead-gen')->name('test-webhook-simulation');
     });
 }); 

@@ -156,6 +156,15 @@
                                                 </svg>
                                             </button>
                                         </form>
+                                        
+                                        <form method="POST" action="{{ cp_route('ch-lead-gen.rules.test-webhook-simulation', $ruleKey) }}" class="inline">
+                                            @csrf
+                                            <button type="submit" class="text-indigo-600 hover:text-indigo-900 p-1 rounded hover:bg-indigo-50" title="Test Webhook Simulation (Real Payload)">
+                                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                                                </svg>
+                                            </button>
+                                        </form>
                                     @endif
                                     
                                     <form method="POST" action="{{ cp_route('ch-lead-gen.rules.destroy', $ruleKey) }}" 

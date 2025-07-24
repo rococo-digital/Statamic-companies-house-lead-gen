@@ -114,24 +114,31 @@ class ApolloService
                 if ($peopleSearchEndpoint) {
                     $safetyMargin = $this->config['apollo']['safety_margin'] ?? 0.6;
                     
+                    // Use header data for "used" values to avoid corrupted endpoint data
+                    $headerUsed = [
+                        'per_minute' => (int)($headers['x-minute-usage'][0] ?? 0),
+                        'per_hour' => (int)($headers['x-hourly-usage'][0] ?? 0),
+                        'per_day' => (int)($headers['x-24-hour-usage'][0] ?? 0)
+                    ];
+                    
                     if (isset($peopleSearchEndpoint['day']['limit'])) {
                         $adjustedDayLimit = (int)($peopleSearchEndpoint['day']['limit'] * $safetyMargin);
                         $limits['per_day']['limit'] = $adjustedDayLimit;
-                        $limits['per_day']['used'] = $peopleSearchEndpoint['day']['consumed'] ?? 0;
+                        $limits['per_day']['used'] = $headerUsed['per_day']; // Use header data instead of endpoint data
                         $limits['per_day']['remaining'] = max(0, $adjustedDayLimit - $limits['per_day']['used']);
                     }
                     
                     if (isset($peopleSearchEndpoint['hour']['limit'])) {
                         $adjustedHourLimit = (int)($peopleSearchEndpoint['hour']['limit'] * $safetyMargin);
                         $limits['per_hour']['limit'] = $adjustedHourLimit;
-                        $limits['per_hour']['used'] = $peopleSearchEndpoint['hour']['consumed'] ?? 0;
+                        $limits['per_hour']['used'] = $headerUsed['per_hour']; // Use header data instead of endpoint data
                         $limits['per_hour']['remaining'] = max(0, $adjustedHourLimit - $limits['per_hour']['used']);
                     }
                     
                     if (isset($peopleSearchEndpoint['minute']['limit'])) {
                         $adjustedMinuteLimit = (int)($peopleSearchEndpoint['minute']['limit'] * $safetyMargin);
                         $limits['per_minute']['limit'] = $adjustedMinuteLimit;
-                        $limits['per_minute']['used'] = $peopleSearchEndpoint['minute']['consumed'] ?? 0;
+                        $limits['per_minute']['used'] = $headerUsed['per_minute']; // Use header data instead of endpoint data
                         $limits['per_minute']['remaining'] = max(0, $adjustedMinuteLimit - $limits['per_minute']['used']);
                     }
                     
