@@ -107,7 +107,7 @@ class ServiceProvider extends AddonServiceProvider
         // Only register if the application is running in console or if we're in a scheduled context
         if ($this->app->runningInConsole() || $this->app->bound('schedule')) {
             Schedule::command('ch-lead-gen:run')
-                ->everyMinute()
+                ->everyFifteenMinutes()
                 ->withoutOverlapping()
                 ->runInBackground()
                 ->description('Run Companies House lead generation scheduled rules');

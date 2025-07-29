@@ -143,6 +143,10 @@ class RuleManagerService
         $this->statsService->startRuleExecution($ruleKey);
 
         try {
+            // Clear Apollo caches to ensure fresh rate limit data
+            Log::info("Clearing Apollo caches for fresh rate limit data");
+            $this->apolloService->clearApolloCaches();
+
             // Pre-execution credit check for Apollo (skip if already done globally)
             if (!$skipCreditCheck) {
                 Log::info("Performing pre-execution Apollo credit check for rule '{$ruleKey}'");
@@ -329,24 +333,31 @@ class RuleManagerService
             // Check webhook configuration before attempting to send
             $webhookEnabled = $rule['webhook']['enabled'] ?? false;
             $webhookUrl = $rule['webhook']['url'] ?? '';
+            $contactsFound = count($allContacts);
             
             Log::info("Webhook configuration check for rule '{$ruleKey}':", [
                 'webhook_enabled' => $webhookEnabled,
                 'webhook_url' => $webhookUrl ? 'configured' : 'not configured',
-                'webhook_url_length' => strlen($webhookUrl)
+                'webhook_url_length' => strlen($webhookUrl),
+                'contacts_found' => $contactsFound
             ]);
 
-            try {
-                $webhookSent = $this->webhookService->sendRuleResults($ruleKey, $rule, $results);
-                if ($webhookSent) {
-                    Log::info("Webhook sent successfully for rule: {$ruleKey}");
-                } else {
-                    Log::warning("Webhook service returned false for rule: {$ruleKey}");
+            // Only send webhook if contacts were found
+            if ($contactsFound > 0) {
+                try {
+                    $webhookSent = $this->webhookService->sendRuleResults($ruleKey, $rule, $results);
+                    if ($webhookSent) {
+                        Log::info("Webhook sent successfully for rule: {$ruleKey}");
+                    } else {
+                        Log::warning("Webhook service returned false for rule: {$ruleKey}");
+                    }
+                } catch (\Exception $e) {
+                    Log::error("Failed to send webhook for rule {$ruleKey}: " . $e->getMessage());
+                    Log::error("Webhook exception details: " . $e->getTraceAsString());
+                    // Don't fail the entire rule execution if webhook fails
                 }
-            } catch (\Exception $e) {
-                Log::error("Failed to send webhook for rule {$ruleKey}: " . $e->getMessage());
-                Log::error("Webhook exception details: " . $e->getTraceAsString());
-                // Don't fail the entire rule execution if webhook fails
+            } else {
+                Log::info("Skipping webhook for rule '{$ruleKey}' - no contacts found (found: {$contactsFound})");
             }
 
             return $results;
